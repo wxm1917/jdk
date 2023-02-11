@@ -1,32 +1,32 @@
 /*
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ * ORACLE PROPRIETARY/CONFIDENTIAL. Use is subject to license terms.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
  */
 
 /*
- * This file is available under and governed by the GNU General Public
- * License version 2 only, as published by the Free Software Foundation.
- * However, the following notice accompanied the original version of this
- * file:
+ *
+ *
+ *
+ *
  *
  * Written by Doug Lea with assistance from members of JCP JSR-166
  * Expert Group and released to the public domain, as explained at
@@ -34,7 +34,6 @@
  */
 
 package java.util.concurrent;
-
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -55,7 +54,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * <p><b>Sample usage:</b> Here is an example of using a barrier in a
  * parallel decomposition design:
  *
- * <pre> {@code
+ *  <pre> {@code
  * class Solver {
  *   final int N;
  *   final float[][] data;
@@ -82,10 +81,11 @@ import java.util.concurrent.locks.ReentrantLock;
  *   public Solver(float[][] matrix) {
  *     data = matrix;
  *     N = matrix.length;
- *     Runnable barrierAction = () -> mergeRows(...);
+ *     Runnable barrierAction =
+ *       new Runnable() { public void run() { mergeRows(...); }};
  *     barrier = new CyclicBarrier(N, barrierAction);
  *
- *     List<Thread> threads = new ArrayList<>(N);
+ *     List<Thread> threads = new ArrayList<Thread>(N);
  *     for (int i = 0; i < N; i++) {
  *       Thread thread = new Thread(new Worker(i));
  *       threads.add(thread);
@@ -94,17 +94,16 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  *     // wait until done
  *     for (Thread thread : threads)
- *       try {
- *         thread.join();
- *       } catch (InterruptedException ex) { }
+ *       thread.join();
  *   }
  * }}</pre>
  *
- * Here, each worker thread processes a row of the matrix, then waits at the
- * barrier until all rows have been processed. When all rows are processed the
- * supplied {@link Runnable} barrier action is executed and merges the rows.
- * If the merger determines that a solution has been found then {@code done()}
- * will return {@code true} and each worker will terminate.
+ * Here, each worker thread processes a row of the matrix then waits at the
+ * barrier until all rows have been processed. When all rows are processed
+ * the supplied {@link Runnable} barrier action is executed and merges the
+ * rows. If the merger
+ * determines that a solution has been found then {@code done()} will return
+ * {@code true} and each worker will terminate.
  *
  * <p>If the barrier action does not rely on the parties being suspended when
  * it is executed, then any of the threads in the party could execute that
@@ -112,7 +111,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * {@link #await} returns the arrival index of that thread at the barrier.
  * You can then choose which thread should execute the barrier action, for
  * example:
- * <pre> {@code
+ *  <pre> {@code
  * if (barrier.await() == 0) {
  *   // log the completion of this iteration
  * }}</pre>
@@ -132,11 +131,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * <i>happen-before</i> actions following a successful return from the
  * corresponding {@code await()} in other threads.
  *
+ * @since 1.5
  * @see CountDownLatch
- * @see Phaser
  *
  * @author Doug Lea
- * @since 1.5
  */
 public class CyclicBarrier {
     /**
@@ -150,9 +148,11 @@ public class CyclicBarrier {
      * There need not be an active generation if there has been a break
      * but no subsequent reset.
      */
+    /**
+     * 为了实现重复执行
+     */
     private static class Generation {
-        Generation() {}                 // prevent access constructor creation
-        boolean broken;                 // initially false
+        boolean broken = false;
     }
 
     /** The lock for guarding barrier entry */
@@ -160,8 +160,14 @@ public class CyclicBarrier {
     /** Condition to wait on until tripped */
     private final Condition trip = lock.newCondition();
     /** The number of parties */
+    /**
+     * 可以认为是worker线程数
+     */
     private final int parties;
-    /** The command to run when tripped */
+    /* The command to run when tripped */
+    /**
+     * 当最后一个worker线程完成后，即trip栅栏时，执行一条命令
+     */
     private final Runnable barrierCommand;
     /** The current generation */
     private Generation generation = new Generation();
@@ -179,8 +185,14 @@ public class CyclicBarrier {
      */
     private void nextGeneration() {
         // signal completion of last generation
+        /**
+         * 唤醒阻塞的线程
+         */
         trip.signalAll();
         // set up next generation
+        /**
+         * 重置，便于执行下一代
+         */
         count = parties;
         generation = new Generation();
     }
@@ -199,16 +211,25 @@ public class CyclicBarrier {
      * Main barrier code, covering the various policies.
      */
     private int dowait(boolean timed, long nanos)
-        throws InterruptedException, BrokenBarrierException,
-               TimeoutException {
+            throws InterruptedException, BrokenBarrierException,
+            TimeoutException {
+        /**
+         * 抢锁
+         */
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
             final Generation g = generation;
 
+            /**
+             * 是否被broker，比如：reset
+             */
             if (g.broken)
                 throw new BrokenBarrierException();
 
+            /**
+             * 是否被终止
+             */
             if (Thread.interrupted()) {
                 breakBarrier();
                 throw new InterruptedException();
@@ -216,22 +237,35 @@ public class CyclicBarrier {
 
             int index = --count;
             if (index == 0) {  // tripped
-                Runnable command = barrierCommand;
-                if (command != null) {
-                    try {
+                /**
+                 * 最后一个worker线程
+                 */
+                boolean ranAction = false;
+                try {
+                    final Runnable command = barrierCommand;
+                    /**
+                     * 执行最后一个命令
+                     */
+                    if (command != null)
                         command.run();
-                    } catch (Throwable ex) {
+                    ranAction = true;
+                    /**
+                     * 当前generation完成，唤醒阻塞的线程，并设置下一代，以便重复执行
+                     */
+                    nextGeneration();
+                    return 0;
+                } finally {
+                    if (!ranAction)
                         breakBarrier();
-                        throw ex;
-                    }
                 }
-                nextGeneration();
-                return 0;
             }
 
             // loop until tripped, broken, interrupted, or timed out
             for (;;) {
                 try {
+                    /**
+                     * 进入tirp条件队列阻塞，此时释放锁，其他线程可以获得锁
+                     */
                     if (!timed)
                         trip.await();
                     else if (nanos > 0L)
@@ -431,9 +465,9 @@ public class CyclicBarrier {
      *         present) failed due to an exception
      */
     public int await(long timeout, TimeUnit unit)
-        throws InterruptedException,
-               BrokenBarrierException,
-               TimeoutException {
+            throws InterruptedException,
+            BrokenBarrierException,
+            TimeoutException {
         return dowait(true, unit.toNanos(timeout));
     }
 
@@ -465,6 +499,9 @@ public class CyclicBarrier {
      * instead create a new barrier for subsequent use.
      */
     public void reset() {
+        /**
+         * 主动重置barrier，可能会影响上一代未完成的线程，比如抛异常
+         */
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
