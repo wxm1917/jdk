@@ -384,8 +384,18 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      * that workerCount is 0 (which sometimes entails a recheck -- see
      * below).
      */
+    /**
+     * 用一个原子变量，存储运行线程数和线程池状态
+     * 值：xxx-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy，高三位表示线程池状态，低位表示运行线程数
+     */
     private final AtomicInteger ctl = new AtomicInteger(ctlOf(RUNNING, 0));
+    /**
+     * 位数29
+     */
     private static final int COUNT_BITS = Integer.SIZE - 3;
+    /**
+     * 最大线程数==2^29 - 1
+     */
     private static final int COUNT_MASK = (1 << COUNT_BITS) - 1;
 
     // runState is stored in the high-order bits
