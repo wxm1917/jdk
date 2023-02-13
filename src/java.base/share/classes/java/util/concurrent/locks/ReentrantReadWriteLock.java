@@ -278,8 +278,17 @@ public class ReentrantReadWriteLock
          * 偏移量
          */
         static final int SHARED_SHIFT   = 16;
+        /**
+         * 共享次数的基数，65536，整型总共32位，低16位表示独占次数，高16位表示共享次数
+         */
         static final int SHARED_UNIT    = (1 << SHARED_SHIFT);
+        /**
+         * 共享或者独占次数的上限，65535
+         */
         static final int MAX_COUNT      = (1 << SHARED_SHIFT) - 1;
+        /**
+         * 用于计算独占数的变量，65535
+         */
         static final int EXCLUSIVE_MASK = (1 << SHARED_SHIFT) - 1;
 
         /** Returns the number of shared holds represented in count  */
