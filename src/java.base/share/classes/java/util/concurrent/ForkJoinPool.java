@@ -181,6 +181,11 @@ import jdk.internal.vm.SharedThreadContainer;
  * @since 1.7
  * @author Doug Lea
  */
+
+/**
+ * 将大任务，拆分成多个小任务并发执行，最后汇总任务执行结果
+ * 比如：大任务是for循环100次，可以分成5个小任务，每个任务for循环20次，即fork后join
+ */
 public class ForkJoinPool extends AbstractExecutorService {
 
     /*

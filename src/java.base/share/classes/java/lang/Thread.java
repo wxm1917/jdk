@@ -1,332 +1,222 @@
 /*
- * Copyright (c) 1994, 2022, Oracle and/or its affiliates. All rights reserved.
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ * Copyright (c) 1994, 2016, Oracle and/or its affiliates. All rights reserved.
+ * ORACLE PROPRIETARY/CONFIDENTIAL. Use is subject to license terms.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
  */
 
 package java.lang;
 
 import java.lang.ref.Reference;
-import java.lang.reflect.Field;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.security.AccessController;
 import java.security.AccessControlContext;
-import java.security.Permission;
 import java.security.PrivilegedAction;
-import java.security.ProtectionDomain;
-import java.time.Duration;
 import java.util.Map;
 import java.util.HashMap;
-import java.util.Objects;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.LockSupport;
-import java.util.function.Predicate;
-import java.util.stream.Stream;
-import jdk.internal.event.ThreadSleepEvent;
-import jdk.internal.javac.PreviewFeature;
-import jdk.internal.misc.PreviewFeatures;
-import jdk.internal.misc.StructureViolationExceptions;
-import jdk.internal.misc.TerminatingThreadLocal;
-import jdk.internal.misc.Unsafe;
-import jdk.internal.misc.VM;
-import jdk.internal.reflect.CallerSensitive;
-import jdk.internal.reflect.Reflection;
-import jdk.internal.vm.Continuation;
-import jdk.internal.vm.ScopedValueContainer;
-import jdk.internal.vm.StackableScope;
-import jdk.internal.vm.ThreadContainer;
-import jdk.internal.vm.annotation.ForceInline;
-import jdk.internal.vm.annotation.Hidden;
-import jdk.internal.vm.annotation.IntrinsicCandidate;
 import sun.nio.ch.Interruptible;
+import sun.reflect.CallerSensitive;
+import sun.reflect.Reflection;
 import sun.security.util.SecurityConstants;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
 
 /**
  * A <i>thread</i> is a thread of execution in a program. The Java
- * virtual machine allows an application to have multiple threads of
+ * Virtual Machine allows an application to have multiple threads of
  * execution running concurrently.
+ * <p>
+ * Every thread has a priority. Threads with higher priority are
+ * executed in preference to threads with lower priority. Each thread
+ * may or may not also be marked as a daemon. When code running in
+ * some thread creates a new <code>Thread</code> object, the new
+ * thread has its priority initially set equal to the priority of the
+ * creating thread, and is a daemon thread if and only if the
+ * creating thread is a daemon.
+ * <p>
+ * When a Java Virtual Machine starts up, there is usually a single
+ * non-daemon thread (which typically calls the method named
+ * <code>main</code> of some designated class). The Java Virtual
+ * Machine continues to execute threads until either of the following
+ * occurs:
+ * <ul>
+ * <li>The <code>exit</code> method of class <code>Runtime</code> has been
+ *     called and the security manager has permitted the exit operation
+ *     to take place.
+ * <li>All threads that are not daemon threads have died, either by
+ *     returning from the call to the <code>run</code> method or by
+ *     throwing an exception that propagates beyond the <code>run</code>
+ *     method.
+ * </ul>
+ * <p>
+ * There are two ways to create a new thread of execution. One is to
+ * declare a class to be a subclass of <code>Thread</code>. This
+ * subclass should override the <code>run</code> method of class
+ * <code>Thread</code>. An instance of the subclass can then be
+ * allocated and started. For example, a thread that computes primes
+ * larger than a stated value could be written as follows:
+ * <hr><blockquote><pre>
+ *     class PrimeThread extends Thread {
+ *         long minPrime;
+ *         PrimeThread(long minPrime) {
+ *             this.minPrime = minPrime;
+ *         }
  *
- * <p> {@code Thread} defines constructors and a {@link Builder} to create threads.
- * {@linkplain #start() Starting} a thread schedules it to execute its {@link #run() run}
- * method. The newly started thread executes concurrently with the thread that caused
- * it to start.
+ *         public void run() {
+ *             // compute primes larger than minPrime
+ *             &nbsp;.&nbsp;.&nbsp;.
+ *         }
+ *     }
+ * </pre></blockquote><hr>
+ * <p>
+ * The following code would then create a thread and start it running:
+ * <blockquote><pre>
+ *     PrimeThread p = new PrimeThread(143);
+ *     p.start();
+ * </pre></blockquote>
+ * <p>
+ * The other way to create a thread is to declare a class that
+ * implements the <code>Runnable</code> interface. That class then
+ * implements the <code>run</code> method. An instance of the class can
+ * then be allocated, passed as an argument when creating
+ * <code>Thread</code>, and started. The same example in this other
+ * style looks like the following:
+ * <hr><blockquote><pre>
+ *     class PrimeRun implements Runnable {
+ *         long minPrime;
+ *         PrimeRun(long minPrime) {
+ *             this.minPrime = minPrime;
+ *         }
  *
- * <p> A thread <i>terminates</i> if either its {@code run} method completes normally,
- * or if its {@code run} method completes abruptly and the appropriate {@linkplain
- * Thread.UncaughtExceptionHandler uncaught exception handler} completes normally or
- * abruptly. With no code left to run, the thread has completed execution. The
- * {@link #join() join} method can be used to wait for a thread to terminate.
+ *         public void run() {
+ *             // compute primes larger than minPrime
+ *             &nbsp;.&nbsp;.&nbsp;.
+ *         }
+ *     }
+ * </pre></blockquote><hr>
+ * <p>
+ * The following code would then create a thread and start it running:
+ * <blockquote><pre>
+ *     PrimeRun p = new PrimeRun(143);
+ *     new Thread(p).start();
+ * </pre></blockquote>
+ * <p>
+ * Every thread has a name for identification purposes. More than
+ * one thread may have the same name. If a name is not specified when
+ * a thread is created, a new name is generated for it.
+ * <p>
+ * Unless otherwise noted, passing a {@code null} argument to a constructor
+ * or method in this class will cause a {@link NullPointerException} to be
+ * thrown.
  *
- * <p> Threads have a unique {@linkplain #threadId() identifier} and a {@linkplain
- * #getName() name}. The identifier is generated when a {@code Thread} is created
- * and cannot be changed. The thread name can be specified when creating a thread
- * or can be {@linkplain #setName(String) changed} at a later time.
- *
- * <p> Threads support {@link ThreadLocal} variables. These are variables that are
- * local to a thread, meaning a thread can have a copy of a variable that is set to
- * a value that is independent of the value set by other threads. Thread also supports
- * {@link InheritableThreadLocal} variables that are thread local variables that are
- * inherited at Thread creation time from the parent Thread. Thread supports a special
- * inheritable thread local for the thread {@linkplain #getContextClassLoader()
- * context-class-loader}.
- *
- * <h2><a id="platform-threads">Platform threads</a></h2>
- * <p> {@code Thread} supports the creation of <i>platform threads</i> that are
- * typically mapped 1:1 to kernel threads scheduled by the operating system.
- * Platform threads will usually have a large stack and other resources that are
- * maintained by the operating system. Platforms threads are suitable for executing
- * all types of tasks but may be a limited resource.
- *
- * <p> Platform threads get an automatically generated thread name by default.
- *
- * <p> Platform threads are designated <i>daemon</i> or <i>non-daemon</i> threads.
- * When the Java virtual machine starts up, there is usually one non-daemon
- * thread (the thread that typically calls the application's {@code main} method).
- * The <a href="Runtime.html#shutdown">shutdown sequence</a> begins when all started
- * non-daemon threads have terminated. Unstarted non-daemon threads do not prevent
- * the shutdown sequence from beginning.
- *
- * <p> In addition to the daemon status, platform threads have a {@linkplain
- * #getPriority() thread priority} and are members of a {@linkplain ThreadGroup
- * thread group}.
- *
- * <h2><a id="virtual-threads">Virtual threads</a></h2>
- * <p> {@code Thread} also supports the creation of <i>virtual threads</i>.
- * Virtual threads are typically <i>user-mode threads</i> scheduled by the Java
- * runtime rather than the operating system. Virtual threads will typically require
- * few resources and a single Java virtual machine may support millions of virtual
- * threads. Virtual threads are suitable for executing tasks that spend most of
- * the time blocked, often waiting for I/O operations to complete. Virtual threads
- * are not intended for long running CPU intensive operations.
- *
- * <p> Virtual threads typically employ a small set of platform threads used as
- * <em>carrier threads</em>. Locking and I/O operations are examples of operations
- * where a carrier thread may be re-scheduled from one virtual thread to another.
- * Code executing in a virtual thread is not aware of the underlying carrier thread.
- * The {@linkplain Thread#currentThread()} method, used to obtain a reference
- * to the <i>current thread</i>, will always return the {@code Thread} object
- * for the virtual thread.
- *
- * <p> Virtual threads do not have a thread name by default. The {@link #getName()
- * getName} method returns the empty string if a thread name is not set.
- *
- * <p> Virtual threads are daemon threads and so do not prevent the
- * <a href="Runtime.html#shutdown">shutdown sequence</a> from beginning.
- * Virtual threads have a fixed {@linkplain #getPriority() thread priority}
- * that cannot be changed.
- *
- * <h2>Creating and starting threads</h2>
- *
- * <p> {@code Thread} defines public constructors for creating platform threads and
- * the {@link #start() start} method to schedule threads to execute. {@code Thread}
- * may be extended for customization and other advanced reasons although most
- * applications should have little need to do this.
- *
- * <p> {@code Thread} defines a {@link Builder} API for creating and starting both
- * platform and virtual threads. The following are examples that use the builder:
- * {@snippet :
- *   Runnable runnable = ...
- *
- *   // Start a daemon thread to run a task
- *   Thread thread = Thread.ofPlatform().daemon().start(runnable);
- *
- *   // Create an unstarted thread with name "duke", its start() method
- *   // must be invoked to schedule it to execute.
- *   Thread thread = Thread.ofPlatform().name("duke").unstarted(runnable);
- *
- *   // A ThreadFactory that creates daemon threads named "worker-0", "worker-1", ...
- *   ThreadFactory factory = Thread.ofPlatform().daemon().name("worker-", 0).factory();
- *
- *   // Start a virtual thread to run a task
- *   Thread thread = Thread.ofVirtual().start(runnable);
- *
- *   // A ThreadFactory that creates virtual threads
- *   ThreadFactory factory = Thread.ofVirtual().factory();
- * }
- *
- * <h2><a id="inheritance">Inheritance when creating threads</a></h2>
- * A {@code Thread} inherits its initial values of {@linkplain InheritableThreadLocal
- * inheritable-thread-local} variables (including the context class loader) from
- * the parent thread values at the time that the child {@code Thread} is created.
- * The 5-param {@linkplain Thread#Thread(ThreadGroup, Runnable, String, long, boolean)
- * constructor} can be used to create a thread that does not inherit its initial
- * values from the constructing thread. When using a {@code Thread.Builder}, the
- * {@link Builder#inheritInheritableThreadLocals(boolean) inheritInheritableThreadLocals}
- * method can be used to select if the initial values are inherited.
- *
- * <p> Platform threads inherit the daemon status, thread priority, and when not
- * provided (or not selected by a security manager), the thread group.
- *
- * <p> Creating a platform thread {@linkplain AccessController#getContext() captures} the
- * {@linkplain AccessControlContext caller context} to limit the {@linkplain Permission
- * permissions} of the new thread when it executes code that performs a {@linkplain
- * AccessController#doPrivileged(PrivilegedAction) privileged action}. The captured
- * caller context is the new thread's "Inherited {@link AccessControlContext}". Creating
- * a virtual thread does not capture the caller context; virtual threads have no
- * permissions when executing code that performs a privileged action.
- *
- * <p> Unless otherwise specified, passing a {@code null} argument to a constructor
- * or method in this class will cause a {@link NullPointerException} to be thrown.
- *
- * @implNote
- * In the JDK Reference Implementation, the virtual thread scheduler may be configured
- * with the following system properties:
- * <table class="striped">
- * <caption style="display:none:">System properties</caption>
- *   <thead>
- *   <tr>
- *     <th scope="col">System property</th>
- *     <th scope="col">Description</th>
- *   </tr>
- *   </thead>
- *   <tbody>
- *   <tr>
- *     <th scope="row">
- *       {@systemProperty jdk.virtualThreadScheduler.parallelism}
- *     </th>
- *     <td> The number of platform threads available for scheduling virtual
- *       threads. It defaults to the number of available processors. </td>
- *   </tr>
- *   <tr>
- *     <th scope="row">
- *       {@systemProperty jdk.virtualThreadScheduler.maxPoolSize}
- *     </th>
- *     <td> The maximum number of platform threads available to the scheduler.
- *       It defaults to 256. </td>
- *   </tr>
- *   </tbody>
- * </table>
- *
- * @since   1.0
+ * @author  unascribed
+ * @see     Runnable
+ * @see     Runtime#exit(int)
+ * @see     #run()
+ * @see     #stop()
+ * @since   JDK1.0
  */
-public class Thread implements Runnable {
+public
+class Thread implements Runnable {
     /* Make sure registerNatives is the first thing <clinit> does. */
     private static native void registerNatives();
     static {
         registerNatives();
     }
 
-    /* Reserved for exclusive use by the JVM, maybe move to FieldHolder */
-    private long eetop;
-
-    // thread id
-    private final long tid;
-
-    // thread name
     private volatile String name;
+    private int            priority;
+    private Thread         threadQ;
+    private long           eetop;
 
-    // interrupt status (read/written by VM)
-    volatile boolean interrupted;
+    /* Whether or not to single_step this thread. */
+    private boolean     single_step;
 
-    // context ClassLoader
-    private volatile ClassLoader contextClassLoader;
+    /* Whether or not the thread is a daemon thread. */
+    private boolean     daemon = false;
 
-    // inherited AccessControlContext, this could be moved to FieldHolder
-    @SuppressWarnings("removal")
+    /* JVM state */
+    private boolean     stillborn = false;
+
+    /* What will be run. */
+    private Runnable target;
+
+    /* The group of this thread */
+    private ThreadGroup group;
+
+    /* The context ClassLoader for this thread */
+    private ClassLoader contextClassLoader;
+
+    /* The inherited AccessControlContext of this thread */
     private AccessControlContext inheritedAccessControlContext;
 
-    // Additional fields for platform threads.
-    // All fields, except task, are accessed directly by the VM.
-    private static class FieldHolder {
-        final ThreadGroup group;
-        final Runnable task;
-        final long stackSize;
-        volatile int priority;
-        volatile boolean daemon;
-        volatile int threadStatus;
-
-        FieldHolder(ThreadGroup group,
-                    Runnable task,
-                    long stackSize,
-                    int priority,
-                    boolean daemon) {
-            this.group = group;
-            this.task = task;
-            this.stackSize = stackSize;
-            this.priority = priority;
-            if (daemon)
-                this.daemon = true;
-        }
+    /* For autonumbering anonymous threads. */
+    private static int threadInitNumber;
+    private static synchronized int nextThreadNum() {
+        return threadInitNumber++;
     }
-    private final FieldHolder holder;
 
-    /*
-     * ThreadLocal values pertaining to this thread. This map is maintained
+    /* ThreadLocal values pertaining to this thread. This map is maintained
      * by the ThreadLocal class. */
-    ThreadLocal.ThreadLocalMap threadLocals;
+    ThreadLocal.ThreadLocalMap threadLocals = null;
 
     /*
      * InheritableThreadLocal values pertaining to this thread. This map is
      * maintained by the InheritableThreadLocal class.
      */
-    ThreadLocal.ThreadLocalMap inheritableThreadLocals;
+    ThreadLocal.ThreadLocalMap inheritableThreadLocals = null;
 
     /*
-     * Scoped value bindings are maintained by the ScopedValue class.
+     * The requested stack size for this thread, or 0 if the creator did
+     * not specify a stack size.  It is up to the VM to do whatever it
+     * likes with this number; some VMs will ignore it.
      */
-    private Object scopedValueBindings;
-
-    // Special value to indicate this is a newly-created Thread
-    // Note that his must match the declaration in ScopedValue.
-    private static final Object NEW_THREAD_BINDINGS = Thread.class;
-
-    static Object scopedValueBindings() {
-        return currentThread().scopedValueBindings;
-    }
-
-    static void setScopedValueBindings(Object bindings) {
-        currentThread().scopedValueBindings = bindings;
-    }
-
-    /**
-     * Search the stack for the most recent scoped-value bindings.
-     */
-    @IntrinsicCandidate
-    static native Object findScopedValueBindings();
-
-    /**
-     * Inherit the scoped-value bindings from the given container.
-     * Invoked when starting a thread.
-     */
-    void inheritScopedValueBindings(ThreadContainer container) {
-        ScopedValueContainer.BindingsSnapshot snapshot;
-        if (container.owner() != null
-                && (snapshot = container.scopedValueBindings()) != null) {
-
-            // bindings established for running/calling an operation
-            Object bindings = snapshot.scopedValueBindings();
-            if (currentThread().scopedValueBindings != bindings) {
-                StructureViolationExceptions.throwException("Scoped value bindings have changed");
-            }
-
-            this.scopedValueBindings = bindings;
-        }
-    }
+    private long stackSize;
 
     /*
-     * Lock object for thread interrupt.
+     * JVM-private state that persists after native thread termination.
      */
-    final Object interruptLock = new Object();
+    private long nativeParkEventPointer;
+
+    /*
+     * Thread ID
+     */
+    private long tid;
+
+    /* For generating thread ID */
+    private static long threadSeqNumber;
+
+    /* Java thread status for tools,
+     * initialized to indicate thread 'not yet started'
+     */
+
+    private volatile int threadStatus = 0;
+
+
+    private static synchronized long nextThreadID() {
+        return ++threadSeqNumber;
+    }
 
     /**
      * The argument supplied to the current call to
@@ -334,88 +224,44 @@ public class Thread implements Runnable {
      * Set by (private) java.util.concurrent.locks.LockSupport.setBlocker
      * Accessed using java.util.concurrent.locks.LockSupport.getBlocker
      */
-    private volatile Object parkBlocker;
+    volatile Object parkBlocker;
 
     /* The object in which this thread is blocked in an interruptible I/O
      * operation, if any.  The blocker's interrupt method should be invoked
      * after setting this thread's interrupt status.
      */
-    volatile Interruptible nioBlocker;
+    private volatile Interruptible blocker;
+    private final Object blockerLock = new Object();
 
-    /* Set the blocker field; invoked via jdk.internal.access.SharedSecrets
-     * from java.nio code
+    /* Set the blocker field; invoked via sun.misc.SharedSecrets from java.nio code
      */
-    static void blockedOn(Interruptible b) {
-        Thread me = Thread.currentThread();
-        synchronized (me.interruptLock) {
-            me.nioBlocker = b;
+    void blockedOn(Interruptible b) {
+        synchronized (blockerLock) {
+            blocker = b;
         }
     }
 
     /**
      * The minimum priority that a thread can have.
      */
-    public static final int MIN_PRIORITY = 1;
+    public final static int MIN_PRIORITY = 1;
 
     /**
      * The default priority that is assigned to a thread.
      */
-    public static final int NORM_PRIORITY = 5;
+    public final static int NORM_PRIORITY = 5;
 
     /**
      * The maximum priority that a thread can have.
      */
-    public static final int MAX_PRIORITY = 10;
-
-    /*
-     * Current inner-most continuation.
-     */
-    private Continuation cont;
+    public final static int MAX_PRIORITY = 10;
 
     /**
-     * Returns the current continuation.
+     * Returns a reference to the currently executing thread object.
+     *
+     * @return  the currently executing thread.
      */
-    Continuation getContinuation() {
-        return cont;
-    }
-
-    /**
-     * Sets the current continuation.
-     */
-    void setContinuation(Continuation cont) {
-        this.cont = cont;
-    }
-
-    /**
-     * Returns the Thread object for the current platform thread. If the
-     * current thread is a virtual thread then this method returns the carrier.
-     */
-    @IntrinsicCandidate
-    static native Thread currentCarrierThread();
-
-    /**
-     * Returns the Thread object for the current thread.
-     * @return  the current thread
-     */
-    @IntrinsicCandidate
     public static native Thread currentThread();
-
-    /**
-     * Sets the Thread object to be returned by Thread.currentThread().
-     */
-    @IntrinsicCandidate
-    native void setCurrentThread(Thread thread);
-
-    // ScopedValue support:
-
-    @IntrinsicCandidate
-    static native Object[] scopedValueCache();
-
-    @IntrinsicCandidate
-    static native void setScopedValueCache(Object[] cache);
-
-    @IntrinsicCandidate
-    static native void ensureMaterializedForStackWalk(Object o);
 
     /**
      * A hint to the scheduler that the current thread is willing to yield
@@ -433,15 +279,7 @@ public class Thread implements Runnable {
      * concurrency control constructs such as the ones in the
      * {@link java.util.concurrent.locks} package.
      */
-    public static void yield() {
-        if (currentThread() instanceof VirtualThread vthread) {
-            vthread.tryYield();
-        } else {
-            yield0();
-        }
-    }
-
-    private static native void yield0();
+    public static native void yield();
 
     /**
      * Causes the currently executing thread to sleep (temporarily cease
@@ -460,32 +298,7 @@ public class Thread implements Runnable {
      *          <i>interrupted status</i> of the current thread is
      *          cleared when this exception is thrown.
      */
-    public static void sleep(long millis) throws InterruptedException {
-        if (millis < 0) {
-            throw new IllegalArgumentException("timeout value is negative");
-        }
-
-        if (currentThread() instanceof VirtualThread vthread) {
-            long nanos = MILLISECONDS.toNanos(millis);
-            vthread.sleepNanos(nanos);
-            return;
-        }
-
-        if (ThreadSleepEvent.isTurnedOn()) {
-            ThreadSleepEvent event = new ThreadSleepEvent();
-            try {
-                event.time = MILLISECONDS.toNanos(millis);
-                event.begin();
-                sleep0(millis);
-            } finally {
-                event.commit();
-            }
-        } else {
-            sleep0(millis);
-        }
-    }
-
-    private static native void sleep0(long millis) throws InterruptedException;
+    public static native void sleep(long millis) throws InterruptedException;
 
     /**
      * Causes the currently executing thread to sleep (temporarily cease
@@ -509,608 +322,107 @@ public class Thread implements Runnable {
      *          <i>interrupted status</i> of the current thread is
      *          cleared when this exception is thrown.
      */
-    public static void sleep(long millis, int nanos) throws InterruptedException {
+    public static void sleep(long millis, int nanos)
+            throws InterruptedException {
         if (millis < 0) {
             throw new IllegalArgumentException("timeout value is negative");
         }
 
         if (nanos < 0 || nanos > 999999) {
-            throw new IllegalArgumentException("nanosecond timeout value out of range");
+            throw new IllegalArgumentException(
+                    "nanosecond timeout value out of range");
         }
 
-        if (currentThread() instanceof VirtualThread vthread) {
-            // total sleep time, in nanoseconds
-            long totalNanos = MILLISECONDS.toNanos(millis);
-            totalNanos += Math.min(Long.MAX_VALUE - totalNanos, nanos);
-            vthread.sleepNanos(totalNanos);
-            return;
-        }
-
-        if (nanos > 0 && millis < Long.MAX_VALUE) {
+        if (nanos >= 500000 || (nanos != 0 && millis == 0)) {
             millis++;
         }
+
         sleep(millis);
     }
 
     /**
-     * Causes the currently executing thread to sleep (temporarily cease
-     * execution) for the specified duration, subject to the precision and
-     * accuracy of system timers and schedulers. This method is a no-op if
-     * the duration is {@linkplain Duration#isNegative() negative}.
-     *
-     * @param  duration
-     *         the duration to sleep
-     *
-     * @throws  InterruptedException
-     *          if the current thread is interrupted while sleeping. The
-     *          <i>interrupted status</i> of the current thread is
-     *          cleared when this exception is thrown.
-     *
-     * @since 19
+     * Initializes a Thread with the current AccessControlContext.
+     * @see #init(ThreadGroup,Runnable,String,long,AccessControlContext,boolean)
      */
-    public static void sleep(Duration duration) throws InterruptedException {
-        long nanos = NANOSECONDS.convert(duration);  // MAX_VALUE if > 292 years
-        if (nanos < 0)
-            return;
-
-        if (currentThread() instanceof VirtualThread vthread) {
-            vthread.sleepNanos(nanos);
-            return;
-        }
-
-        // convert to milliseconds
-        long millis = MILLISECONDS.convert(nanos, NANOSECONDS);
-        if (nanos > NANOSECONDS.convert(millis, MILLISECONDS)) {
-            millis += 1L;
-        }
-        sleep(millis);
+    private void init(ThreadGroup g, Runnable target, String name,
+                      long stackSize) {
+        init(g, target, name, stackSize, null, true);
     }
 
     /**
-     * Indicates that the caller is momentarily unable to progress, until the
-     * occurrence of one or more actions on the part of other activities. By
-     * invoking this method within each iteration of a spin-wait loop construct,
-     * the calling thread indicates to the runtime that it is busy-waiting.
-     * The runtime may take action to improve the performance of invoking
-     * spin-wait loop constructions.
+     * Initializes a Thread.
      *
-     * @apiNote
-     * As an example consider a method in a class that spins in a loop until
-     * some flag is set outside of that method. A call to the {@code onSpinWait}
-     * method should be placed inside the spin loop.
-     * {@snippet :
-     *     class EventHandler {
-     *         volatile boolean eventNotificationNotReceived;
-     *         void waitForEventAndHandleIt() {
-     *             while ( eventNotificationNotReceived ) {
-     *                 Thread.onSpinWait();
-     *             }
-     *             readAndProcessEvent();
-     *         }
-     *
-     *         void readAndProcessEvent() {
-     *             // Read event from some source and process it
-     *              . . .
-     *         }
-     *     }
-     * }
-     * <p>
-     * The code above would remain correct even if the {@code onSpinWait}
-     * method was not called at all. However on some architectures the Java
-     * Virtual Machine may issue the processor instructions to address such
-     * code patterns in a more beneficial way.
-     *
-     * @since 9
-     */
-    @IntrinsicCandidate
-    public static void onSpinWait() {}
-
-    /**
-     * Characteristic value signifying that the thread cannot set values for its
-     * copy of {@link ThreadLocal thread-locals}.
-     * See Thread initialization.
-     */
-    static final int NO_THREAD_LOCALS = 1 << 1;
-
-    /**
-     * Characteristic value signifying that initial values for {@link
-     * InheritableThreadLocal inheritable-thread-locals} are not inherited from
-     * the constructing thread.
-     * See Thread initialization.
-     */
-    static final int NO_INHERIT_THREAD_LOCALS = 1 << 2;
-
-    /**
-     * Helper class to generate thread identifiers. The identifiers start at
-     * 2 as this class cannot be used during early startup to generate the
-     * identifier for the primordial thread. The counter is off-heap and
-     * shared with the VM to allow it assign thread identifiers to non-Java
-     * threads.
-     * See Thread initialization.
-     */
-    private static class ThreadIdentifiers {
-        private static final Unsafe U;
-        private static final long NEXT_TID_OFFSET;
-        static {
-            U = Unsafe.getUnsafe();
-            NEXT_TID_OFFSET = Thread.getNextThreadIdOffset();
-        }
-        static long next() {
-            return U.getAndAddLong(null, NEXT_TID_OFFSET, 1);
-        }
-    }
-
-    /**
-     * Returns the context class loader to inherit from the parent thread.
-     * See Thread initialization.
-     */
-    private static ClassLoader contextClassLoader(Thread parent) {
-        @SuppressWarnings("removal")
-        SecurityManager sm = System.getSecurityManager();
-        if (sm == null || isCCLOverridden(parent.getClass())) {
-            return parent.getContextClassLoader();
-        } else {
-            // skip call to getContextClassLoader
-            ClassLoader cl = parent.contextClassLoader;
-            return (isSupportedClassLoader(cl)) ? cl : ClassLoader.getSystemClassLoader();
-        }
-    }
-
-    /**
-     * Initializes a platform Thread.
-     *
-     * @param g the Thread group, can be null
+     * @param g the Thread group
+     * @param target the object whose run() method gets called
      * @param name the name of the new Thread
-     * @param characteristics thread characteristics
-     * @param task the object whose run() method gets called
      * @param stackSize the desired stack size for the new thread, or
      *        zero to indicate that this parameter is to be ignored.
      * @param acc the AccessControlContext to inherit, or
-     *        AccessController.getContext() if null
+     *            AccessController.getContext() if null
+     * @param inheritThreadLocals if {@code true}, inherit initial values for
+     *            inheritable thread-locals from the constructing thread
      */
-    @SuppressWarnings("removal")
-    Thread(ThreadGroup g, String name, int characteristics, Runnable task,
-           long stackSize, AccessControlContext acc) {
+    private void init(ThreadGroup g, Runnable target, String name,
+                      long stackSize, AccessControlContext acc,
+                      boolean inheritThreadLocals) {
+        if (name == null) {
+            throw new NullPointerException("name cannot be null");
+        }
+
+        this.name = name;
 
         Thread parent = currentThread();
-        boolean attached = (parent == this);   // primordial or JNI attached
+        SecurityManager security = System.getSecurityManager();
+        if (g == null) {
+            /* Determine if it's an applet or not */
 
-        if (attached) {
+            /* If there is a security manager, ask the security manager
+               what to do. */
+            if (security != null) {
+                g = security.getThreadGroup();
+            }
+
+            /* If the security doesn't have a strong opinion of the matter
+               use the parent thread group. */
             if (g == null) {
-                throw new InternalError("group cannot be null when attaching");
-            }
-            this.holder = new FieldHolder(g, task, stackSize, NORM_PRIORITY, false);
-        } else {
-            SecurityManager sm = System.getSecurityManager();
-            if (g == null) {
-                // the security manager can choose the thread group
-                if (sm != null) {
-                    g = sm.getThreadGroup();
-                }
-
-                // default to current thread's group
-                if (g == null) {
-                    g = parent.getThreadGroup();
-                }
-            }
-
-            // permission checks when creating a child Thread
-            if (sm != null) {
-                sm.checkAccess(g);
-                if (isCCLOverridden(getClass())) {
-                    sm.checkPermission(SecurityConstants.SUBCLASS_IMPLEMENTATION_PERMISSION);
-                }
-            }
-
-            int priority = Math.min(parent.getPriority(), g.getMaxPriority());
-            this.holder = new FieldHolder(g, task, stackSize, priority, parent.isDaemon());
-        }
-
-        if (attached && VM.initLevel() < 1) {
-            this.tid = 1;  // primordial thread
-        } else {
-            this.tid = ThreadIdentifiers.next();
-        }
-        this.name = (name != null) ? name : genThreadName();
-
-        if (acc != null) {
-            this.inheritedAccessControlContext = acc;
-        } else {
-            this.inheritedAccessControlContext = AccessController.getContext();
-        }
-
-        // thread locals
-        if (!attached) {
-            if ((characteristics & NO_THREAD_LOCALS) != 0) {
-                this.threadLocals = ThreadLocal.ThreadLocalMap.NOT_SUPPORTED;
-                this.inheritableThreadLocals = ThreadLocal.ThreadLocalMap.NOT_SUPPORTED;
-                this.contextClassLoader = Constants.NOT_SUPPORTED_CLASSLOADER;
-            } else if ((characteristics & NO_INHERIT_THREAD_LOCALS) == 0) {
-                ThreadLocal.ThreadLocalMap parentMap = parent.inheritableThreadLocals;
-                if (parentMap != null
-                        && parentMap != ThreadLocal.ThreadLocalMap.NOT_SUPPORTED
-                        && parentMap.size() > 0) {
-                    this.inheritableThreadLocals = ThreadLocal.createInheritedMap(parentMap);
-                }
-                ClassLoader parentLoader = contextClassLoader(parent);
-                if (VM.isBooted() && !isSupportedClassLoader(parentLoader)) {
-                    // parent does not support thread locals so no CCL to inherit
-                    this.contextClassLoader = ClassLoader.getSystemClassLoader();
-                } else {
-                    this.contextClassLoader = parentLoader;
-                }
-            } else if (VM.isBooted()) {
-                // default CCL to the system class loader when not inheriting
-                this.contextClassLoader = ClassLoader.getSystemClassLoader();
+                g = parent.getThreadGroup();
             }
         }
 
-        // Special value to indicate this is a newly-created Thread
-        // Note that his must match the declaration in ScopedValue.
-        this.scopedValueBindings = NEW_THREAD_BINDINGS;
-    }
+        /* checkAccess regardless of whether or not threadgroup is
+           explicitly passed in. */
+        g.checkAccess();
 
-    /**
-     * Initializes a virtual Thread.
-     *
-     * @param name thread name, can be null
-     * @param characteristics thread characteristics
-     * @param bound true when bound to an OS thread
-     */
-    Thread(String name, int characteristics, boolean bound) {
-        this.tid = ThreadIdentifiers.next();
-        this.name = (name != null) ? name : "";
-        this.inheritedAccessControlContext = Constants.NO_PERMISSIONS_ACC;
-
-        // thread locals
-        if ((characteristics & NO_THREAD_LOCALS) != 0) {
-            this.threadLocals = ThreadLocal.ThreadLocalMap.NOT_SUPPORTED;
-            this.inheritableThreadLocals = ThreadLocal.ThreadLocalMap.NOT_SUPPORTED;
-            this.contextClassLoader = Constants.NOT_SUPPORTED_CLASSLOADER;
-        } else if ((characteristics & NO_INHERIT_THREAD_LOCALS) == 0) {
-            Thread parent = currentThread();
-            ThreadLocal.ThreadLocalMap parentMap = parent.inheritableThreadLocals;
-            if (parentMap != null
-                    && parentMap != ThreadLocal.ThreadLocalMap.NOT_SUPPORTED
-                    && parentMap.size() > 0) {
-                this.inheritableThreadLocals = ThreadLocal.createInheritedMap(parentMap);
+        /*
+         * Do we have the required permissions?
+         */
+        if (security != null) {
+            if (isCCLOverridden(getClass())) {
+                security.checkPermission(SUBCLASS_IMPLEMENTATION_PERMISSION);
             }
-            ClassLoader parentLoader = contextClassLoader(parent);
-            if (isSupportedClassLoader(parentLoader)) {
-                this.contextClassLoader = parentLoader;
-            } else {
-                // parent does not support thread locals so no CCL to inherit
-                this.contextClassLoader = ClassLoader.getSystemClassLoader();
-            }
-        } else {
-            // default CCL to the system class loader when not inheriting
-            this.contextClassLoader = ClassLoader.getSystemClassLoader();
         }
 
-        // Special value to indicate this is a newly-created Thread
-        this.scopedValueBindings = NEW_THREAD_BINDINGS;
+        g.addUnstarted();
 
-        // create a FieldHolder object, needed when bound to an OS thread
-        if (bound) {
-            ThreadGroup g = Constants.VTHREAD_GROUP;
-            int pri = NORM_PRIORITY;
-            this.holder = new FieldHolder(g, null, -1, pri, true);
-        } else {
-            this.holder = null;
-        }
-    }
+        this.group = g;
+        this.daemon = parent.isDaemon();
+        this.priority = parent.getPriority();
+        if (security == null || isCCLOverridden(parent.getClass()))
+            this.contextClassLoader = parent.getContextClassLoader();
+        else
+            this.contextClassLoader = parent.contextClassLoader;
+        this.inheritedAccessControlContext =
+                acc != null ? acc : AccessController.getContext();
+        this.target = target;
+        setPriority(priority);
+        if (inheritThreadLocals && parent.inheritableThreadLocals != null)
+            this.inheritableThreadLocals =
+                    ThreadLocal.createInheritedMap(parent.inheritableThreadLocals);
+        /* Stash the specified stack size in case the VM cares */
+        this.stackSize = stackSize;
 
-    /**
-     * Returns a builder for creating a platform {@code Thread} or {@code ThreadFactory}
-     * that creates platform threads.
-     *
-     * <p> <a id="ofplatform-security"><b>Interaction with security manager when
-     * creating platform threads</b></a>
-     * <p> Creating a platform thread when there is a security manager set will
-     * invoke the security manager's {@link SecurityManager#checkAccess(ThreadGroup)
-     * checkAccess(ThreadGroup)} method with the thread's thread group.
-     * If the thread group has not been set with the {@link
-     * Builder.OfPlatform#group(ThreadGroup) OfPlatform.group} method then the
-     * security manager's {@link SecurityManager#getThreadGroup() getThreadGroup}
-     * method will be invoked first to select the thread group. If the security
-     * manager {@code getThreadGroup} method returns {@code null} then the thread
-     * group of the constructing thread is used.
-     *
-     * @apiNote The following are examples using the builder:
-     * {@snippet :
-     *   // Start a daemon thread to run a task
-     *   Thread thread = Thread.ofPlatform().daemon().start(runnable);
-     *
-     *   // Create an unstarted thread with name "duke", its start() method
-     *   // must be invoked to schedule it to execute.
-     *   Thread thread = Thread.ofPlatform().name("duke").unstarted(runnable);
-     *
-     *   // A ThreadFactory that creates daemon threads named "worker-0", "worker-1", ...
-     *   ThreadFactory factory = Thread.ofPlatform().daemon().name("worker-", 0).factory();
-     * }
-     *
-     * @return A builder for creating {@code Thread} or {@code ThreadFactory} objects.
-     * @since 19
-     */
-    @PreviewFeature(feature = PreviewFeature.Feature.VIRTUAL_THREADS)
-    public static Builder.OfPlatform ofPlatform() {
-        return new ThreadBuilders.PlatformThreadBuilder();
-    }
-
-    /**
-     * Returns a builder for creating a virtual {@code Thread} or {@code ThreadFactory}
-     * that creates virtual threads.
-     *
-     * @apiNote The following are examples using the builder:
-     * {@snippet :
-     *   // Start a virtual thread to run a task.
-     *   Thread thread = Thread.ofVirtual().start(runnable);
-     *
-     *   // A ThreadFactory that creates virtual threads
-     *   ThreadFactory factory = Thread.ofVirtual().factory();
-     * }
-     *
-     * @return A builder for creating {@code Thread} or {@code ThreadFactory} objects.
-     * @throws UnsupportedOperationException if preview features are not enabled
-     * @since 19
-     */
-    @PreviewFeature(feature = PreviewFeature.Feature.VIRTUAL_THREADS)
-    public static Builder.OfVirtual ofVirtual() {
-        PreviewFeatures.ensureEnabled();
-        return new ThreadBuilders.VirtualThreadBuilder();
-    }
-
-    /**
-     * A builder for {@link Thread} and {@link ThreadFactory} objects.
-     *
-     * <p> {@code Builder} defines methods to set {@code Thread} properties such
-     * as the thread {@link #name(String) name}. This includes properties that would
-     * otherwise be <a href="Thread.html#inheritance">inherited</a>. Once set, a
-     * {@code Thread} or {@code ThreadFactory} is created with the following methods:
-     *
-     * <ul>
-     *     <li> The {@linkplain #unstarted(Runnable) unstarted} method creates a new
-     *          <em>unstarted</em> {@code Thread} to run a task. The {@code Thread}'s
-     *          {@link Thread#start() start} method must be invoked to schedule the
-     *          thread to execute.
-     *     <li> The {@linkplain #start(Runnable) start} method creates a new {@code
-     *          Thread} to run a task and schedules the thread to execute.
-     *     <li> The {@linkplain #factory() factory} method creates a {@code ThreadFactory}.
-     * </ul>
-     *
-     * <p> A {@code Thread.Builder} is not thread safe. The {@code ThreadFactory}
-     * returned by the builder's {@code factory()} method is thread safe.
-     *
-     * <p> Unless otherwise specified, passing a null argument to a method in
-     * this interface causes a {@code NullPointerException} to be thrown.
-     *
-     * @see Thread#ofPlatform()
-     * @see Thread#ofVirtual()
-     * @since 19
-     */
-    @PreviewFeature(feature = PreviewFeature.Feature.VIRTUAL_THREADS)
-    public sealed interface Builder
-            permits Builder.OfPlatform,
-                    Builder.OfVirtual,
-                    ThreadBuilders.BaseThreadBuilder {
-
-
-        /**
-         * Sets the thread name.
-         * @param name thread name
-         * @return this builder
-         */
-        Builder name(String name);
-
-        /**
-         * Sets the thread name to be the concatenation of a string prefix and
-         * the string representation of a counter value. The counter's initial
-         * value is {@code start}. It is incremented after a {@code Thread} is
-         * created with this builder so that the next thread is named with
-         * the new counter value. A {@code ThreadFactory} created with this
-         * builder is seeded with the current value of the counter. The {@code
-         * ThreadFactory} increments its copy of the counter after {@link
-         * ThreadFactory#newThread(Runnable) newThread} is used to create a
-         * {@code Thread}.
-         *
-         * @apiNote
-         * The following example creates a builder that is invoked twice to start
-         * two threads named "{@code worker-0}" and "{@code worker-1}".
-         * {@snippet :
-         *   Thread.Builder builder = Thread.ofPlatform().name("worker-", 0);
-         *   Thread t1 = builder.start(task1);   // name "worker-0"
-         *   Thread t2 = builder.start(task2);   // name "worker-1"
-         * }
-         *
-         * @param prefix thread name prefix
-         * @param start the starting value of the counter
-         * @return this builder
-         * @throws IllegalArgumentException if start is negative
-         */
-        Builder name(String prefix, long start);
-
-        /**
-         * Sets whether the thread is allowed to set values for its copy of {@linkplain
-         * ThreadLocal thread-local} variables. The default is to allow. If not allowed,
-         * then any attempt by the thread to set a value for a thread-local with the
-         * {@link ThreadLocal#set(Object)} method throws {@code
-         * UnsupportedOperationException}. Any attempt to set the thread's context
-         * class loader with {@link Thread#setContextClassLoader(ClassLoader)
-         * setContextClassLoader} also throws. The {@link ThreadLocal#get()} method
-         * always returns the {@linkplain ThreadLocal#initialValue() initial-value}
-         * when thread locals are not allowed.
-         *
-         * @apiNote This method is intended for cases where there are a large number of
-         * threads and where potentially unbounded memory usage due to thread locals is
-         * a concern. Disallowing a thread to set its copy of thread-local variables
-         * creates the potential for exceptions at run-time so great care is required
-         * when the thread is used to invoke arbitrary code.
-         *
-         * @param allow {@code true} to allow, {@code false} to disallow
-         * @return this builder
-         */
-        Builder allowSetThreadLocals(boolean allow);
-
-        /**
-         * Sets whether the thread inherits the initial values of {@linkplain
-         * InheritableThreadLocal inheritable-thread-local} variables from the
-         * constructing thread. The default is to inherit.
-         *
-         * <p> The initial values of {@code InheritableThreadLocal}s are never inherited
-         * when {@link #allowSetThreadLocals(boolean)} is used to disallow the thread
-         * to have its own copy of thread-local variables.
-         *
-         * @param inherit {@code true} to inherit, {@code false} to not inherit
-         * @return this builder
-         */
-        Builder inheritInheritableThreadLocals(boolean inherit);
-
-        /**
-         * Sets the uncaught exception handler.
-         * @param ueh uncaught exception handler
-         * @return this builder
-         */
-        Builder uncaughtExceptionHandler(UncaughtExceptionHandler ueh);
-
-        /**
-         * Creates a new {@code Thread} from the current state of the builder to
-         * run the given task. The {@code Thread}'s {@link Thread#start() start}
-         * method must be invoked to schedule the thread to execute.
-         *
-         * @param task the object to run when the thread executes
-         * @return a new unstarted Thread
-         * @throws SecurityException if denied by the security manager
-         *         (See <a href="Thread.html#ofplatform-security">Interaction with
-         *         security manager when creating platform threads</a>)
-         *
-         * @see <a href="Thread.html#inheritance">Inheritance when creating threads</a>
-         */
-        Thread unstarted(Runnable task);
-
-        /**
-         * Creates a new {@code Thread} from the current state of the builder and
-         * schedules it to execute.
-         *
-         * @param task the object to run when the thread executes
-         * @return a new started Thread
-         * @throws SecurityException if denied by the security manager
-         *         (See <a href="Thread.html#ofplatform-security">Interaction with
-         *         security manager when creating platform threads</a>)
-         *
-         * @see <a href="Thread.html#inheritance">Inheritance when creating threads</a>
-         */
-        Thread start(Runnable task);
-
-        /**
-         * Returns a {@code ThreadFactory} to create threads from the current
-         * state of the builder. The returned thread factory is safe for use by
-         * multiple concurrent threads.
-         *
-         * @return a thread factory to create threads
-         */
-        ThreadFactory factory();
-
-        /**
-         * A builder for creating a platform {@link Thread} or {@link ThreadFactory}
-         * that creates platform threads.
-         *
-         * <p> Unless otherwise specified, passing a null argument to a method in
-         * this interface causes a {@code NullPointerException} to be thrown.
-         *
-         * @see Thread#ofPlatform()
-         * @since 19
-         */
-        @PreviewFeature(feature = PreviewFeature.Feature.VIRTUAL_THREADS)
-        sealed interface OfPlatform extends Builder
-                permits ThreadBuilders.PlatformThreadBuilder {
-
-            @Override OfPlatform name(String name);
-
-            /**
-             * @throws IllegalArgumentException {@inheritDoc}
-             */
-            @Override OfPlatform name(String prefix, long start);
-
-            @Override OfPlatform allowSetThreadLocals(boolean allow);
-            @Override OfPlatform inheritInheritableThreadLocals(boolean inherit);
-            @Override OfPlatform uncaughtExceptionHandler(UncaughtExceptionHandler ueh);
-
-            /**
-             * Sets the thread group.
-             * @param group the thread group
-             * @return this builder
-             */
-            OfPlatform group(ThreadGroup group);
-
-            /**
-             * Sets the daemon status.
-             * @param on {@code true} to create daemon threads
-             * @return this builder
-             */
-            OfPlatform daemon(boolean on);
-
-            /**
-             * Sets the daemon status to {@code true}.
-             * @implSpec The default implementation invokes {@linkplain #daemon(boolean)} with
-             * a value of {@code true}.
-             * @return this builder
-             */
-            default OfPlatform daemon() {
-                return daemon(true);
-            }
-
-            /**
-             * Sets the thread priority.
-             * @param priority priority
-             * @return this builder
-             * @throws IllegalArgumentException if the priority is less than
-             *        {@link Thread#MIN_PRIORITY} or greater than {@link Thread#MAX_PRIORITY}
-             */
-            OfPlatform priority(int priority);
-
-            /**
-             * Sets the desired stack size.
-             *
-             * <p> The stack size is the approximate number of bytes of address space
-             * that the Java virtual machine is to allocate for the thread's stack. The
-             * effect is highly platform dependent and the Java virtual machine is free
-             * to treat the {@code stackSize} parameter as a "suggestion". If the value
-             * is unreasonably low for the platform then a platform specific minimum
-             * may be used. If the value is unreasonably high then a platform specific
-             * maximum may be used. A value of zero is always ignored.
-             *
-             * @param stackSize the desired stack size
-             * @return this builder
-             * @throws IllegalArgumentException if the stack size is negative
-             */
-            OfPlatform stackSize(long stackSize);
-        }
-
-        /**
-         * A builder for creating a virtual {@link Thread} or {@link ThreadFactory}
-         * that creates virtual threads.
-         *
-         * <p> Unless otherwise specified, passing a null argument to a method in
-         * this interface causes a {@code NullPointerException} to be thrown.
-         *
-         * @see Thread#ofVirtual()
-         * @since 19
-         */
-        @PreviewFeature(feature = PreviewFeature.Feature.VIRTUAL_THREADS)
-        sealed interface OfVirtual extends Builder
-                permits ThreadBuilders.VirtualThreadBuilder {
-
-            @Override OfVirtual name(String name);
-
-            /**
-             * @throws IllegalArgumentException {@inheritDoc}
-             */
-            @Override OfVirtual name(String prefix, long start);
-
-            @Override OfVirtual allowSetThreadLocals(boolean allow);
-            @Override OfVirtual inheritInheritableThreadLocals(boolean inherit);
-            @Override OfVirtual uncaughtExceptionHandler(UncaughtExceptionHandler ueh);
-        }
+        /* Set thread ID */
+        tid = nextThreadID();
     }
 
     /**
@@ -1126,103 +438,47 @@ public class Thread implements Runnable {
     }
 
     /**
-     * Helper class for auto-numbering platform threads. The numbers start at
-     * 0 and are separate from the thread identifier for historical reasons.
-     */
-    private static class ThreadNumbering {
-        private static final Unsafe U;
-        private static final Object NEXT_BASE;
-        private static final long NEXT_OFFSET;
-        static {
-            U = Unsafe.getUnsafe();
-            try {
-                Field nextField = ThreadNumbering.class.getDeclaredField("next");
-                NEXT_BASE = U.staticFieldBase(nextField);
-                NEXT_OFFSET = U.staticFieldOffset(nextField);
-            } catch (NoSuchFieldException e) {
-                throw new ExceptionInInitializerError(e);
-            }
-        }
-        private static volatile int next;
-        static int next() {
-            return U.getAndAddInt(NEXT_BASE, NEXT_OFFSET, 1);
-        }
-    }
-
-    /**
-     * Generates a thread name of the form {@code Thread-<n>}.
-     */
-    static String genThreadName() {
-        return "Thread-" + ThreadNumbering.next();
-    }
-
-    /**
-     * Throws NullPointerException if the name is null. Avoids use of
-     * Objects.requireNonNull in early startup.
-     */
-    private static String checkName(String name) {
-        if (name == null)
-            throw new NullPointerException("'name' is null");
-        return name;
-    }
-
-    /**
-     * Initializes a new platform {@code Thread}. This constructor has the same
+     * Allocates a new {@code Thread} object. This constructor has the same
      * effect as {@linkplain #Thread(ThreadGroup,Runnable,String) Thread}
      * {@code (null, null, gname)}, where {@code gname} is a newly generated
      * name. Automatically generated names are of the form
      * {@code "Thread-"+}<i>n</i>, where <i>n</i> is an integer.
-     *
-     * <p> This constructor is only useful when extending {@code Thread} to
-     * override the {@link #run()} method.
-     *
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
     public Thread() {
-        this(null, null, 0, null, 0, null);
+        init(null, null, "Thread-" + nextThreadNum(), 0);
     }
 
     /**
-     * Initializes a new platform {@code Thread}. This constructor has the same
+     * Allocates a new {@code Thread} object. This constructor has the same
      * effect as {@linkplain #Thread(ThreadGroup,Runnable,String) Thread}
-     * {@code (null, task, gname)}, where {@code gname} is a newly generated
+     * {@code (null, target, gname)}, where {@code gname} is a newly generated
      * name. Automatically generated names are of the form
      * {@code "Thread-"+}<i>n</i>, where <i>n</i> is an integer.
      *
-     * <p> For a non-null task, invoking this constructor directly is equivalent to:
-     * <pre>{@code Thread.ofPlatform().unstarted(task); }</pre>
-     *
-     * @param  task
+     * @param  target
      *         the object whose {@code run} method is invoked when this thread
      *         is started. If {@code null}, this classes {@code run} method does
      *         nothing.
-     *
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
-    public Thread(Runnable task) {
-        this(null, null, 0, task, 0, null);
+    public Thread(Runnable target) {
+        init(null, target, "Thread-" + nextThreadNum(), 0);
     }
 
     /**
-     * Creates a new Thread that inherits the given AccessControlContext
-     * but thread-local variables are not inherited.
+     * Creates a new Thread that inherits the given AccessControlContext.
      * This is not a public constructor.
      */
-    Thread(Runnable task, @SuppressWarnings("removal") AccessControlContext acc) {
-        this(null, null, 0, task, 0, acc);
+    Thread(Runnable target, AccessControlContext acc) {
+        init(null, target, "Thread-" + nextThreadNum(), 0, acc, false);
     }
 
     /**
-     * Initializes a new platform {@code Thread}. This constructor has the same
+     * Allocates a new {@code Thread} object. This constructor has the same
      * effect as {@linkplain #Thread(ThreadGroup,Runnable,String) Thread}
-     * {@code (group, task, gname)}, where {@code gname} is a newly generated
+     * {@code (group, target, gname)} ,where {@code gname} is a newly generated
      * name. Automatically generated names are of the form
      * {@code "Thread-"+}<i>n</i>, where <i>n</i> is an integer.
      *
-     * <p> For a non-null group and task, invoking this constructor directly is
-     * equivalent to:
-     * <pre>{@code Thread.ofPlatform().group(group).unstarted(task); }</pre>
-     *
      * @param  group
      *         the thread group. If {@code null} and there is a security
      *         manager, the group is determined by {@linkplain
@@ -1231,44 +487,34 @@ public class Thread implements Runnable {
      *         SecurityManager.getThreadGroup()} returns {@code null}, the group
      *         is set to the current thread's thread group.
      *
-     * @param  task
+     * @param  target
      *         the object whose {@code run} method is invoked when this thread
      *         is started. If {@code null}, this thread's run method is invoked.
      *
      * @throws  SecurityException
      *          if the current thread cannot create a thread in the specified
      *          thread group
-     *
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
-    public Thread(ThreadGroup group, Runnable task) {
-        this(group, null, 0, task, 0, null);
+    public Thread(ThreadGroup group, Runnable target) {
+        init(group, target, "Thread-" + nextThreadNum(), 0);
     }
 
     /**
-     * Initializes a new platform {@code Thread}. This constructor has the same
+     * Allocates a new {@code Thread} object. This constructor has the same
      * effect as {@linkplain #Thread(ThreadGroup,Runnable,String) Thread}
      * {@code (null, null, name)}.
      *
-     * <p> This constructor is only useful when extending {@code Thread} to
-     * override the {@link #run()} method.
-     *
      * @param   name
      *          the name of the new thread
-     *
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
     public Thread(String name) {
-        this(null, checkName(name), 0, null, 0, null);
+        init(null, null, name, 0);
     }
 
     /**
-     * Initializes a new platform {@code Thread}. This constructor has the same
+     * Allocates a new {@code Thread} object. This constructor has the same
      * effect as {@linkplain #Thread(ThreadGroup,Runnable,String) Thread}
      * {@code (group, null, name)}.
-     *
-     * <p> This constructor is only useful when extending {@code Thread} to
-     * override the {@link #run()} method.
      *
      * @param  group
      *         the thread group. If {@code null} and there is a security
@@ -1284,37 +530,29 @@ public class Thread implements Runnable {
      * @throws  SecurityException
      *          if the current thread cannot create a thread in the specified
      *          thread group
-     *
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
     public Thread(ThreadGroup group, String name) {
-        this(group, checkName(name), 0, null, 0, null);
+        init(group, null, name, 0);
     }
 
     /**
-     * Initializes a new platform {@code Thread}. This constructor has the same
+     * Allocates a new {@code Thread} object. This constructor has the same
      * effect as {@linkplain #Thread(ThreadGroup,Runnable,String) Thread}
-     * {@code (null, task, name)}.
+     * {@code (null, target, name)}.
      *
-     * <p> For a non-null task and name, invoking this constructor directly is
-     * equivalent to:
-     * <pre>{@code Thread.ofPlatform().name(name).unstarted(task); }</pre>
-     *
-     * @param  task
+     * @param  target
      *         the object whose {@code run} method is invoked when this thread
      *         is started. If {@code null}, this thread's run method is invoked.
      *
      * @param  name
      *         the name of the new thread
-     *
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
-    public Thread(Runnable task, String name) {
-        this(null, checkName(name), 0, task, 0, null);
+    public Thread(Runnable target, String name) {
+        init(null, target, name, 0);
     }
 
     /**
-     * Initializes a new platform {@code Thread} so that it has {@code task}
+     * Allocates a new {@code Thread} object so that it has {@code target}
      * as its run object, has the specified {@code name} as its name,
      * and belongs to the thread group referred to by {@code group}.
      *
@@ -1328,19 +566,15 @@ public class Thread implements Runnable {
      * of a subclass which overrides the {@code getContextClassLoader}
      * or {@code setContextClassLoader} methods.
      *
-     * <p>The priority of the newly created thread is the smaller of
-     * priority of the thread creating it and the maximum permitted
-     * priority of the thread group. The method {@linkplain #setPriority
-     * setPriority} may be used to change the priority to a new value.
+     * <p>The priority of the newly created thread is set equal to the
+     * priority of the thread creating it, that is, the currently running
+     * thread. The method {@linkplain #setPriority setPriority} may be
+     * used to change the priority to a new value.
      *
      * <p>The newly created thread is initially marked as being a daemon
      * thread if and only if the thread creating it is currently marked
      * as a daemon thread. The method {@linkplain #setDaemon setDaemon}
      * may be used to change whether or not a thread is a daemon.
-     *
-     * <p>For a non-null group, task, and name, invoking this constructor directly
-     * is equivalent to:
-     * <pre>{@code Thread.ofPlatform().group(group).name(name).unstarted(task); }</pre>
      *
      * @param  group
      *         the thread group. If {@code null} and there is a security
@@ -1350,7 +584,7 @@ public class Thread implements Runnable {
      *         SecurityManager.getThreadGroup()} returns {@code null}, the group
      *         is set to the current thread's thread group.
      *
-     * @param  task
+     * @param  target
      *         the object whose {@code run} method is invoked when this thread
      *         is started. If {@code null}, this thread's run method is invoked.
      *
@@ -1360,15 +594,13 @@ public class Thread implements Runnable {
      * @throws  SecurityException
      *          if the current thread cannot create a thread in the specified
      *          thread group or cannot override the context class loader methods.
-     *
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
-    public Thread(ThreadGroup group, Runnable task, String name) {
-        this(group, checkName(name), 0, task, 0, null);
+    public Thread(ThreadGroup group, Runnable target, String name) {
+        init(group, target, name, 0);
     }
 
     /**
-     * Initializes a new platform {@code Thread} so that it has {@code task}
+     * Allocates a new {@code Thread} object so that it has {@code target}
      * as its run object, has the specified {@code name} as its name,
      * and belongs to the thread group referred to by {@code group}, and has
      * the specified <i>stack size</i>.
@@ -1386,7 +618,7 @@ public class Thread implements Runnable {
      * Similarly, specifying a lower value may allow a greater number of
      * threads to exist concurrently without throwing an {@link
      * OutOfMemoryError} (or other internal error).  The details of
-     * the relationship between the value of the {@code stackSize} parameter
+     * the relationship between the value of the <tt>stackSize</tt> parameter
      * and the maximum recursion depth and concurrency level are
      * platform-dependent.  <b>On some platforms, the value of the
      * {@code stackSize} parameter may have no effect whatsoever.</b>
@@ -1415,9 +647,6 @@ public class Thread implements Runnable {
      * document their implementation's behavior with respect to the
      * {@code stackSize} parameter.
      *
-     * <p>For a non-null group, task, and name, invoking this constructor directly
-     * is equivalent to:
-     * <pre>{@code Thread.ofPlatform().group(group).name(name).stackSize(stackSize).unstarted(task); }</pre>
      *
      * @param  group
      *         the thread group. If {@code null} and there is a security
@@ -1427,7 +656,7 @@ public class Thread implements Runnable {
      *         SecurityManager.getThreadGroup()} returns {@code null}, the group
      *         is set to the current thread's thread group.
      *
-     * @param  task
+     * @param  target
      *         the object whose {@code run} method is invoked when this thread
      *         is started. If {@code null}, this thread's run method is invoked.
      *
@@ -1443,159 +672,58 @@ public class Thread implements Runnable {
      *          thread group
      *
      * @since 1.4
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
      */
-    public Thread(ThreadGroup group, Runnable task, String name, long stackSize) {
-        this(group, checkName(name), 0, task, stackSize, null);
+    public Thread(ThreadGroup group, Runnable target, String name,
+                  long stackSize) {
+        init(group, target, name, stackSize);
     }
 
     /**
-     * Initializes a new platform {@code Thread} so that it has {@code task}
-     * as its run object, has the specified {@code name} as its name,
-     * belongs to the thread group referred to by {@code group}, has
-     * the specified {@code stackSize}, and inherits initial values for
-     * {@linkplain InheritableThreadLocal inheritable thread-local} variables
-     * if {@code inheritThreadLocals} is {@code true}.
+     * Causes this thread to begin execution; the Java Virtual Machine
+     * calls the <code>run</code> method of this thread.
+     * <p>
+     * The result is that two threads are running concurrently: the
+     * current thread (which returns from the call to the
+     * <code>start</code> method) and the other thread (which executes its
+     * <code>run</code> method).
+     * <p>
+     * It is never legal to start a thread more than once.
+     * In particular, a thread may not be restarted once it has completed
+     * execution.
      *
-     * <p> This constructor is identical to {@link
-     * #Thread(ThreadGroup,Runnable,String,long)} with the added ability to
-     * suppress, or not, the inheriting of initial values for inheritable
-     * thread-local variables from the constructing thread. This allows for
-     * finer grain control over inheritable thread-locals. Care must be taken
-     * when passing a value of {@code false} for {@code inheritThreadLocals},
-     * as it may lead to unexpected behavior if the new thread executes code
-     * that expects a specific thread-local value to be inherited.
-     *
-     * <p> Specifying a value of {@code true} for the {@code inheritThreadLocals}
-     * parameter will cause this constructor to behave exactly like the
-     * {@code Thread(ThreadGroup, Runnable, String, long)} constructor.
-     *
-     * <p> For a non-null group, task, and name, invoking this constructor directly
-     * is equivalent to:
-     * <pre>{@code Thread.ofPlatform()
-     *      .group(group)
-     *      .name(name)
-     *      .stackSize(stackSize)
-     *      .inheritInheritableThreadLocals(inheritInheritableThreadLocals)
-     *      .unstarted(task); }</pre>
-     *
-     * @param  group
-     *         the thread group. If {@code null} and there is a security
-     *         manager, the group is determined by {@linkplain
-     *         SecurityManager#getThreadGroup SecurityManager.getThreadGroup()}.
-     *         If there is not a security manager or {@code
-     *         SecurityManager.getThreadGroup()} returns {@code null}, the group
-     *         is set to the current thread's thread group.
-     *
-     * @param  task
-     *         the object whose {@code run} method is invoked when this thread
-     *         is started. If {@code null}, this thread's run method is invoked.
-     *
-     * @param  name
-     *         the name of the new thread
-     *
-     * @param  stackSize
-     *         the desired stack size for the new thread, or zero to indicate
-     *         that this parameter is to be ignored
-     *
-     * @param  inheritInheritableThreadLocals
-     *         if {@code true}, inherit initial values for inheritable
-     *         thread-locals from the constructing thread, otherwise no initial
-     *         values are inherited
-     *
-     * @throws  SecurityException
-     *          if the current thread cannot create a thread in the specified
-     *          thread group
-     *
-     * @since 9
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
+     * @exception  IllegalThreadStateException  if the thread was already
+     *               started.
+     * @see        #run()
+     * @see        #stop()
      */
-    public Thread(ThreadGroup group, Runnable task, String name,
-                  long stackSize, boolean inheritInheritableThreadLocals) {
-        this(group, checkName(name),
-                (inheritInheritableThreadLocals ? 0 : NO_INHERIT_THREAD_LOCALS),
-                task, stackSize, null);
-    }
+    public synchronized void start() {
+        /**
+         * This method is not invoked for the main method thread or "system"
+         * group threads created/set up by the VM. Any new functionality added
+         * to this method in the future may have to also be added to the VM.
+         *
+         * A zero status value corresponds to state "NEW".
+         */
+        if (threadStatus != 0)
+            throw new IllegalThreadStateException();
 
-    /**
-     * Creates a virtual thread to execute a task and schedules it to execute.
-     *
-     * <p> This method is equivalent to:
-     * <pre>{@code Thread.ofVirtual().start(task); }</pre>
-     *
-     * @param task the object to run when the thread executes
-     * @return a new, and started, virtual thread
-     * @throws UnsupportedOperationException if preview features are not enabled
-     * @see <a href="#inheritance">Inheritance when creating threads</a>
-     * @since 19
-     */
-    @PreviewFeature(feature = PreviewFeature.Feature.VIRTUAL_THREADS)
-    public static Thread startVirtualThread(Runnable task) {
-        Objects.requireNonNull(task);
-        PreviewFeatures.ensureEnabled();
-        var thread = ThreadBuilders.newVirtualThread(null, null, 0, task);
-        thread.start();
-        return thread;
-    }
+        /* Notify the group that this thread is about to be started
+         * so that it can be added to the group's list of threads
+         * and the group's unstarted count can be decremented. */
+        group.add(this);
 
-    /**
-     * Returns {@code true} if this thread is a virtual thread. A virtual thread
-     * is scheduled by the Java virtual machine rather than the operating system.
-     *
-     * @return {@code true} if this thread is a virtual thread
-     *
-     * @since 19
-     */
-    @PreviewFeature(feature = PreviewFeature.Feature.VIRTUAL_THREADS)
-    public final boolean isVirtual() {
-        return (this instanceof BaseVirtualThread);
-    }
-
-    /**
-     * Schedules this thread to begin execution. The thread will execute
-     * independently of the current thread.
-     *
-     * <p> A thread can be started at most once. In particular, a thread can not
-     * be restarted after it has terminated.
-     *
-     * @throws IllegalThreadStateException if the thread was already started
-     */
-    public void start() {
-        synchronized (this) {
-            // zero status corresponds to state "NEW".
-            if (holder.threadStatus != 0)
-                throw new IllegalThreadStateException();
+        boolean started = false;
+        try {
             start0();
-        }
-    }
-
-    /**
-     * Schedules this thread to begin execution in the given thread container.
-     * @throws IllegalStateException if the container is shutdown or closed
-     * @throws IllegalThreadStateException if the thread has already been started
-     */
-    void start(ThreadContainer container) {
-        synchronized (this) {
-            // zero status corresponds to state "NEW".
-            if (holder.threadStatus != 0)
-                throw new IllegalThreadStateException();
-
-            // bind thread to container
-            setThreadContainer(container);
-
-            // start thread
-            boolean started = false;
-            container.onStart(this);  // may throw
+            started = true;
+        } finally {
             try {
-                // scoped values may be inherited
-                inheritScopedValueBindings(container);
-
-                start0();
-                started = true;
-            } finally {
                 if (!started) {
-                    container.onExit(this);
+                    group.threadStartFailed(this);
                 }
+            } catch (Throwable ignore) {
+                /* do nothing. If start0 threw a Throwable then
+                  it will be passed up the call stack */
             }
         }
     }
@@ -1603,105 +731,144 @@ public class Thread implements Runnable {
     private native void start0();
 
     /**
-     * This method is run by the thread when it executes. Subclasses of {@code
-     * Thread} may override this method.
+     * If this thread was constructed using a separate
+     * <code>Runnable</code> run object, then that
+     * <code>Runnable</code> object's <code>run</code> method is called;
+     * otherwise, this method does nothing and returns.
+     * <p>
+     * Subclasses of <code>Thread</code> should override this method.
      *
-     * <p> This method is not intended to be invoked directly. If this thread is a
-     * platform thread created with a {@link Runnable} task then invoking this method
-     * will invoke the task's {@code run} method. If this thread is a virtual thread
-     * then invoking this method directly does nothing.
-     *
-     * @implSpec The default implementation executes the {@link Runnable} task that
-     * the {@code Thread} was created with. If the thread was created without a task
-     * then this method does nothing.
+     * @see     #start()
+     * @see     #stop()
+     * @see     #Thread(ThreadGroup, Runnable, String)
      */
     @Override
     public void run() {
-        Runnable task = holder.task;
-        if (task != null) {
-            Object bindings = scopedValueBindings();
-            runWith(bindings, task);
+        if (target != null) {
+            target.run();
         }
     }
 
     /**
-     * The VM recognizes this method as special, so any changes to the
-     * name or signature require corresponding changes in
-     * JVM_FindScopedValueBindings().
-     */
-    @Hidden
-    @ForceInline
-    private void runWith(Object bindings, Runnable op) {
-        ensureMaterializedForStackWalk(bindings);
-        op.run();
-        Reference.reachabilityFence(bindings);
-    }
-
-    /**
-     * Null out reference after Thread termination.
-     */
-    void clearReferences() {
-        threadLocals = null;
-        inheritableThreadLocals = null;
-        inheritedAccessControlContext = null;
-        if (uncaughtExceptionHandler != null)
-            uncaughtExceptionHandler = null;
-        if (nioBlocker != null)
-            nioBlocker = null;
-    }
-
-    /**
-     * This method is called by the VM to give a Thread
+     * This method is called by the system to give a Thread
      * a chance to clean up before it actually exits.
      */
     private void exit() {
-        // pop any remaining scopes from the stack, this may block
-        if (headStackableScopes != null) {
-            StackableScope.popAll();
+        if (group != null) {
+            group.threadTerminated(this);
+            group = null;
         }
-
-        // notify container that thread is exiting
-        ThreadContainer container = threadContainer();
-        if (container != null) {
-            container.onExit(this);
-        }
-
-        try {
-            if (threadLocals != null && TerminatingThreadLocal.REGISTRY.isPresent()) {
-                TerminatingThreadLocal.threadTerminated();
-            }
-        } finally {
-            clearReferences();
-        }
+        /* Aggressively null out all reference fields: see bug 4006245 */
+        target = null;
+        /* Speed the release of some of these resources */
+        threadLocals = null;
+        inheritableThreadLocals = null;
+        inheritedAccessControlContext = null;
+        blocker = null;
+        uncaughtExceptionHandler = null;
     }
 
     /**
-     * Throws {@code UnsupportedOperationException}.
+     * Forces the thread to stop executing.
+     * <p>
+     * If there is a security manager installed, its <code>checkAccess</code>
+     * method is called with <code>this</code>
+     * as its argument. This may result in a
+     * <code>SecurityException</code> being raised (in the current thread).
+     * <p>
+     * If this thread is different from the current thread (that is, the current
+     * thread is trying to stop a thread other than itself), the
+     * security manager's <code>checkPermission</code> method (with a
+     * <code>RuntimePermission("stopThread")</code> argument) is called in
+     * addition.
+     * Again, this may result in throwing a
+     * <code>SecurityException</code> (in the current thread).
+     * <p>
+     * The thread represented by this thread is forced to stop whatever
+     * it is doing abnormally and to throw a newly created
+     * <code>ThreadDeath</code> object as an exception.
+     * <p>
+     * It is permitted to stop a thread that has not yet been started.
+     * If the thread is eventually started, it immediately terminates.
+     * <p>
+     * An application should not normally try to catch
+     * <code>ThreadDeath</code> unless it must do some extraordinary
+     * cleanup operation (note that the throwing of
+     * <code>ThreadDeath</code> causes <code>finally</code> clauses of
+     * <code>try</code> statements to be executed before the thread
+     * officially dies).  If a <code>catch</code> clause catches a
+     * <code>ThreadDeath</code> object, it is important to rethrow the
+     * object so that the thread actually dies.
+     * <p>
+     * The top-level error handler that reacts to otherwise uncaught
+     * exceptions does not print out a message or otherwise notify the
+     * application if the uncaught exception is an instance of
+     * <code>ThreadDeath</code>.
      *
-     * @throws  UnsupportedOperationException always
-     *
-     * @deprecated This method was originally specified to "stop" a victim
-     *       thread by causing the victim thread to throw a {@link ThreadDeath}.
-     *       It was inherently unsafe. Stopping a thread caused it to unlock
-     *       all of the monitors that it had locked (as a natural consequence
-     *       of the {@code ThreadDeath} exception propagating up the stack). If
+     * @exception  SecurityException  if the current thread cannot
+     *               modify this thread.
+     * @see        #interrupt()
+     * @see        #checkAccess()
+     * @see        #run()
+     * @see        #start()
+     * @see        ThreadDeath
+     * @see        ThreadGroup#uncaughtException(Thread,Throwable)
+     * @see        SecurityManager#checkAccess(Thread)
+     * @see        SecurityManager#checkPermission
+     * @deprecated This method is inherently unsafe.  Stopping a thread with
+     *       Thread.stop causes it to unlock all of the monitors that it
+     *       has locked (as a natural consequence of the unchecked
+     *       <code>ThreadDeath</code> exception propagating up the stack).  If
      *       any of the objects previously protected by these monitors were in
-     *       an inconsistent state, the damaged objects became visible to
-     *       other threads, potentially resulting in arbitrary behavior.
-     *       Usages of {@code stop} should be replaced by code that simply
+     *       an inconsistent state, the damaged objects become visible to
+     *       other threads, potentially resulting in arbitrary behavior.  Many
+     *       uses of <code>stop</code> should be replaced by code that simply
      *       modifies some variable to indicate that the target thread should
      *       stop running.  The target thread should check this variable
      *       regularly, and return from its run method in an orderly fashion
      *       if the variable indicates that it is to stop running.  If the
      *       target thread waits for long periods (on a condition variable,
-     *       for example), the {@code interrupt} method should be used to
+     *       for example), the <code>interrupt</code> method should be used to
      *       interrupt the wait.
      *       For more information, see
-     *       <a href="{@docRoot}/java.base/java/lang/doc-files/threadPrimitiveDeprecation.html">Why
+     *       <a href="{@docRoot}/../technotes/guides/concurrency/threadPrimitiveDeprecation.html">Why
      *       are Thread.stop, Thread.suspend and Thread.resume Deprecated?</a>.
      */
-    @Deprecated(since="1.2", forRemoval=true)
+    @Deprecated
     public final void stop() {
+        SecurityManager security = System.getSecurityManager();
+        if (security != null) {
+            checkAccess();
+            if (this != Thread.currentThread()) {
+                security.checkPermission(SecurityConstants.STOP_THREAD_PERMISSION);
+            }
+        }
+        // A zero status value corresponds to "NEW", it can't change to
+        // not-NEW because we hold the lock.
+        if (threadStatus != 0) {
+            resume(); // Wake up thread if it was suspended; no-op otherwise
+        }
+
+        // The VM can handle all thread states
+        stop0(new ThreadDeath());
+    }
+
+    /**
+     * Throws {@code UnsupportedOperationException}.
+     *
+     * @param obj ignored
+     *
+     * @deprecated This method was originally designed to force a thread to stop
+     *        and throw a given {@code Throwable} as an exception. It was
+     *        inherently unsafe (see {@link #stop()} for details), and furthermore
+     *        could be used to generate exceptions that the target thread was
+     *        not prepared to handle.
+     *        For more information, see
+     *        <a href="{@docRoot}/../technotes/guides/concurrency/threadPrimitiveDeprecation.html">Why
+     *        are Thread.stop, Thread.suspend and Thread.resume Deprecated?</a>.
+     */
+    @Deprecated
+    public final synchronized void stop(Throwable obj) {
         throw new UnsupportedOperationException();
     }
 
@@ -1717,7 +884,7 @@ public class Thread implements Runnable {
      * Object#wait() wait()}, {@link Object#wait(long) wait(long)}, or {@link
      * Object#wait(long, int) wait(long, int)} methods of the {@link Object}
      * class, or of the {@link #join()}, {@link #join(long)}, {@link
-     * #join(long, int)}, {@link #sleep(long)}, or {@link #sleep(long, int)}
+     * #join(long, int)}, {@link #sleep(long)}, or {@link #sleep(long, int)},
      * methods of this class, then its interrupt status will be cleared and it
      * will receive an {@link InterruptedException}.
      *
@@ -1738,32 +905,25 @@ public class Thread implements Runnable {
      *
      * <p> Interrupting a thread that is not alive need not have any effect.
      *
-     * @implNote In the JDK Reference Implementation, interruption of a thread
-     * that is not alive still records that the interrupt request was made and
-     * will report it via {@link #interrupted} and {@link #isInterrupted()}.
-     *
      * @throws  SecurityException
      *          if the current thread cannot modify this thread
      *
-     * @revised 6.0, 14
+     * @revised 6.0
+     * @spec JSR-51
      */
     public void interrupt() {
-        if (this != Thread.currentThread()) {
+        if (this != Thread.currentThread())
             checkAccess();
 
-            // thread may be blocked in an I/O operation
-            synchronized (interruptLock) {
-                Interruptible b = nioBlocker;
-                if (b != null) {
-                    interrupted = true;
-                    interrupt0();  // inform VM of interrupt
-                    b.interrupt(this);
-                    return;
-                }
+        synchronized (blockerLock) {
+            Interruptible b = blocker;
+            if (b != null) {
+                interrupt0();           // Just to set the interrupt flag
+                b.interrupt(this);
+                return;
             }
         }
-        interrupted = true;
-        interrupt0();  // inform VM of interrupt
+        interrupt0();
     }
 
     /**
@@ -1774,188 +934,189 @@ public class Thread implements Runnable {
      * interrupted again, after the first call had cleared its interrupted
      * status and before the second call had examined it).
      *
-     * @return  {@code true} if the current thread has been interrupted;
-     *          {@code false} otherwise.
+     * <p>A thread interruption ignored because a thread was not alive
+     * at the time of the interrupt will be reflected by this method
+     * returning false.
+     *
+     * @return  <code>true</code> if the current thread has been interrupted;
+     *          <code>false</code> otherwise.
      * @see #isInterrupted()
-     * @revised 6.0, 14
+     * @revised 6.0
      */
     public static boolean interrupted() {
-        return currentThread().getAndClearInterrupt();
+        return currentThread().isInterrupted(true);
     }
 
     /**
      * Tests whether this thread has been interrupted.  The <i>interrupted
      * status</i> of the thread is unaffected by this method.
      *
-     * @return  {@code true} if this thread has been interrupted;
-     *          {@code false} otherwise.
+     * <p>A thread interruption ignored because a thread was not alive
+     * at the time of the interrupt will be reflected by this method
+     * returning false.
+     *
+     * @return  <code>true</code> if this thread has been interrupted;
+     *          <code>false</code> otherwise.
      * @see     #interrupted()
-     * @revised 6.0, 14
+     * @revised 6.0
      */
     public boolean isInterrupted() {
-        return interrupted;
+        return isInterrupted(false);
     }
 
-    final void setInterrupt() {
-        // assert Thread.currentCarrierThread() == this;
-        if (!interrupted) {
-            interrupted = true;
-            interrupt0();  // inform VM of interrupt
-        }
-    }
+    /**
+     * Tests if some Thread has been interrupted.  The interrupted state
+     * is reset or not based on the value of ClearInterrupted that is
+     * passed.
+     */
+    private native boolean isInterrupted(boolean ClearInterrupted);
 
-    final void clearInterrupt() {
-        // assert Thread.currentCarrierThread() == this;
-        if (interrupted) {
-            interrupted = false;
-            clearInterruptEvent();
-        }
-    }
-
-    boolean getAndClearInterrupt() {
-        boolean oldValue = interrupted;
-        // We may have been interrupted the moment after we read the field,
-        // so only clear the field if we saw that it was set and will return
-        // true; otherwise we could lose an interrupt.
-        if (oldValue) {
-            interrupted = false;
-            clearInterruptEvent();
-        }
-        return oldValue;
+    /**
+     * Throws {@link NoSuchMethodError}.
+     *
+     * @deprecated This method was originally designed to destroy this
+     *     thread without any cleanup. Any monitors it held would have
+     *     remained locked. However, the method was never implemented.
+     *     If if were to be implemented, it would be deadlock-prone in
+     *     much the manner of {@link #suspend}. If the target thread held
+     *     a lock protecting a critical system resource when it was
+     *     destroyed, no thread could ever access this resource again.
+     *     If another thread ever attempted to lock this resource, deadlock
+     *     would result. Such deadlocks typically manifest themselves as
+     *     "frozen" processes. For more information, see
+     *     <a href="{@docRoot}/../technotes/guides/concurrency/threadPrimitiveDeprecation.html">
+     *     Why are Thread.stop, Thread.suspend and Thread.resume Deprecated?</a>.
+     * @throws NoSuchMethodError always
+     */
+    @Deprecated
+    public void destroy() {
+        throw new NoSuchMethodError();
     }
 
     /**
      * Tests if this thread is alive. A thread is alive if it has
-     * been started and has not yet terminated.
+     * been started and has not yet died.
      *
-     * @return  {@code true} if this thread is alive;
-     *          {@code false} otherwise.
+     * @return  <code>true</code> if this thread is alive;
+     *          <code>false</code> otherwise.
      */
-    public final boolean isAlive() {
-        return alive();
-    }
+    public final native boolean isAlive();
 
     /**
-     * Returns true if this thread is alive.
-     * This method is non-final so it can be overridden.
-     */
-    boolean alive() {
-        return isAlive0();
-    }
-    private native boolean isAlive0();
-
-    /**
-     * Throws {@code UnsupportedOperationException}.
+     * Suspends this thread.
+     * <p>
+     * First, the <code>checkAccess</code> method of this thread is called
+     * with no arguments. This may result in throwing a
+     * <code>SecurityException </code>(in the current thread).
+     * <p>
+     * If the thread is alive, it is suspended and makes no further
+     * progress unless and until it is resumed.
      *
-     * @throws  UnsupportedOperationException always
-     *
-     * @deprecated This method was originally specified to suspend a thread.
-     *     It was inherently deadlock-prone. If the target thread held a lock on
-     *     a monitor protecting a critical system resource when it was suspended,
-     *     no thread could access the resource until the target thread was resumed.
-     *     If the thread intending to resume the target thread attempted to lock
-     *     the monitor prior to calling {@code resume}, deadlock would result.
-     *     Such deadlocks typically manifested themselves as "frozen" processes.
-     *     For more information, see
-     *     <a href="{@docRoot}/java.base/java/lang/doc-files/threadPrimitiveDeprecation.html">Why
-     *     are Thread.stop, Thread.suspend and Thread.resume Deprecated?</a>.
+     * @exception  SecurityException  if the current thread cannot modify
+     *               this thread.
+     * @see #checkAccess
+     * @deprecated   This method has been deprecated, as it is
+     *   inherently deadlock-prone.  If the target thread holds a lock on the
+     *   monitor protecting a critical system resource when it is suspended, no
+     *   thread can access this resource until the target thread is resumed. If
+     *   the thread that would resume the target thread attempts to lock this
+     *   monitor prior to calling <code>resume</code>, deadlock results.  Such
+     *   deadlocks typically manifest themselves as "frozen" processes.
+     *   For more information, see
+     *   <a href="{@docRoot}/../technotes/guides/concurrency/threadPrimitiveDeprecation.html">Why
+     *   are Thread.stop, Thread.suspend and Thread.resume Deprecated?</a>.
      */
-    @Deprecated(since="1.2", forRemoval=true)
+    @Deprecated
     public final void suspend() {
-        throw new UnsupportedOperationException();
+        checkAccess();
+        suspend0();
     }
 
     /**
-     * Throws {@code UnsupportedOperationException}.
+     * Resumes a suspended thread.
+     * <p>
+     * First, the <code>checkAccess</code> method of this thread is called
+     * with no arguments. This may result in throwing a
+     * <code>SecurityException</code> (in the current thread).
+     * <p>
+     * If the thread is alive but suspended, it is resumed and is
+     * permitted to make progress in its execution.
      *
-     * @throws  UnsupportedOperationException always
-     *
-     * @deprecated This method was originally specified to resume a thread
-     *     suspended with {@link #suspend()}. Suspending a thread was
-     *     inherently deadlock-prone.
+     * @exception  SecurityException  if the current thread cannot modify this
+     *               thread.
+     * @see        #checkAccess
+     * @see        #suspend()
+     * @deprecated This method exists solely for use with {@link #suspend},
+     *     which has been deprecated because it is deadlock-prone.
      *     For more information, see
-     *     <a href="{@docRoot}/java.base/java/lang/doc-files/threadPrimitiveDeprecation.html">Why
+     *     <a href="{@docRoot}/../technotes/guides/concurrency/threadPrimitiveDeprecation.html">Why
      *     are Thread.stop, Thread.suspend and Thread.resume Deprecated?</a>.
      */
-    @Deprecated(since="1.2", forRemoval=true)
+    @Deprecated
     public final void resume() {
-        throw new UnsupportedOperationException();
+        checkAccess();
+        resume0();
     }
 
     /**
      * Changes the priority of this thread.
+     * <p>
+     * First the <code>checkAccess</code> method of this thread is called
+     * with no arguments. This may result in throwing a
+     * <code>SecurityException</code>.
+     * <p>
+     * Otherwise, the priority of this thread is set to the smaller of
+     * the specified <code>newPriority</code> and the maximum permitted
+     * priority of the thread's thread group.
      *
-     * For platform threads, the priority is set to the smaller of the specified
-     * {@code newPriority} and the maximum permitted priority of the thread's
-     * {@linkplain ThreadGroup thread group}.
-     *
-     * The priority of a virtual thread is always {@link Thread#NORM_PRIORITY}
-     * and {@code newPriority} is ignored.
-     *
-     * @param newPriority the new thread priority
-     * @throws  IllegalArgumentException if the priority is not in the
-     *          range {@code MIN_PRIORITY} to {@code MAX_PRIORITY}.
-     * @throws  SecurityException
-     *          if {@link #checkAccess} determines that the current
-     *          thread cannot modify this thread
-     * @see #setPriority(int)
-     * @see ThreadGroup#getMaxPriority()
+     * @param newPriority priority to set this thread to
+     * @exception  IllegalArgumentException  If the priority is not in the
+     *               range <code>MIN_PRIORITY</code> to
+     *               <code>MAX_PRIORITY</code>.
+     * @exception  SecurityException  if the current thread cannot modify
+     *               this thread.
+     * @see        #getPriority
+     * @see        #checkAccess()
+     * @see        #getThreadGroup()
+     * @see        #MAX_PRIORITY
+     * @see        #MIN_PRIORITY
+     * @see        ThreadGroup#getMaxPriority()
      */
     public final void setPriority(int newPriority) {
+        ThreadGroup g;
         checkAccess();
         if (newPriority > MAX_PRIORITY || newPriority < MIN_PRIORITY) {
             throw new IllegalArgumentException();
         }
-        if (!isVirtual()) {
-            priority(newPriority);
-        }
-    }
-
-    void priority(int newPriority) {
-        ThreadGroup g = holder.group;
-        if (g != null) {
-            int maxPriority = g.getMaxPriority();
-            if (newPriority > maxPriority) {
-                newPriority = maxPriority;
+        if((g = getThreadGroup()) != null) {
+            if (newPriority > g.getMaxPriority()) {
+                newPriority = g.getMaxPriority();
             }
-            setPriority0(holder.priority = newPriority);
+            setPriority0(priority = newPriority);
         }
     }
 
     /**
      * Returns this thread's priority.
      *
-     * <p> The priority of a virtual thread is always {@link Thread#NORM_PRIORITY}.
-     *
      * @return  this thread's priority.
      * @see     #setPriority
      */
     public final int getPriority() {
-        if (isVirtual()) {
-            return Thread.NORM_PRIORITY;
-        } else {
-            return holder.priority;
-        }
+        return priority;
     }
 
     /**
-     * Changes the name of this thread to be equal to the argument {@code name}.
+     * Changes the name of this thread to be equal to the argument
+     * <code>name</code>.
      * <p>
-     * First the {@code checkAccess} method of this thread is called
+     * First the <code>checkAccess</code> method of this thread is called
      * with no arguments. This may result in throwing a
-     * {@code SecurityException}.
-     *
-     * @implNote In the JDK Reference Implementation, if this thread is the
-     * current thread, and it's a platform thread that was not attached to the
-     * VM with the Java Native Interface
-     * <a href="{@docRoot}/../specs/jni/invocation.html#attachcurrentthread">
-     * AttachCurrentThread</a> function, then this method will set the operating
-     * system thread name. This may be useful for debugging and troubleshooting
-     * purposes.
+     * <code>SecurityException</code>.
      *
      * @param      name   the new name for this thread.
-     * @throws     SecurityException  if the current thread cannot modify this
-     *             thread.
+     * @exception  SecurityException  if the current thread cannot modify this
+     *               thread.
      * @see        #getName
      * @see        #checkAccess()
      */
@@ -1964,8 +1125,9 @@ public class Thread implements Runnable {
         if (name == null) {
             throw new NullPointerException("name cannot be null");
         }
+
         this.name = name;
-        if (!isVirtual() && Thread.currentThread() == this) {
+        if (threadStatus != 0) {
             setNativeName(name);
         }
     }
@@ -1981,27 +1143,21 @@ public class Thread implements Runnable {
     }
 
     /**
-     * Returns the thread's thread group or {@code null} if the thread has
-     * terminated.
+     * Returns the thread group to which this thread belongs.
+     * This method returns null if this thread has died
+     * (been stopped).
      *
-     * <p> The thread group returned for a virtual thread is the special
-     * <a href="ThreadGroup.html#virtualthreadgroup"><em>ThreadGroup for
-     * virtual threads</em></a>.
-     *
-     * @return  this thread's thread group or {@code null}
+     * @return  this thread's thread group.
      */
     public final ThreadGroup getThreadGroup() {
-        if (isTerminated()) {
-            return null;
-        } else {
-            return isVirtual() ? virtualThreadGroup() : holder.group;
-        }
+        return group;
     }
 
     /**
-     * Returns an estimate of the number of {@linkplain #isAlive() live}
-     * platform threads in the current thread's thread group and its subgroups.
-     * Virtual threads are not included in the estimate.
+     * Returns an estimate of the number of active threads in the current
+     * thread's {@linkplain java.lang.ThreadGroup thread group} and its
+     * subgroups. Recursively iterates over all subgroups in the current
+     * thread's thread group.
      *
      * <p> The value returned is only an estimate because the number of
      * threads may change dynamically while this method traverses internal
@@ -2009,25 +1165,24 @@ public class Thread implements Runnable {
      * system threads. This method is intended primarily for debugging
      * and monitoring purposes.
      *
-     * @return  an estimate of the number of live platform threads in the
-     *          current thread's thread group and in any other thread group
-     *          that has the current thread's thread group as an ancestor
+     * @return  an estimate of the number of active threads in the current
+     *          thread's thread group and in any other thread group that
+     *          has the current thread's thread group as an ancestor
      */
     public static int activeCount() {
         return currentThread().getThreadGroup().activeCount();
     }
 
     /**
-     * Copies into the specified array every {@linkplain #isAlive() live}
-     * platform thread in the current thread's thread group and its subgroups.
-     * This method simply invokes the {@link java.lang.ThreadGroup#enumerate(Thread[])}
-     * method of the current thread's thread group. Virtual threads are
-     * not enumerated by this method.
+     * Copies into the specified array every active thread in the current
+     * thread's thread group and its subgroups. This method simply
+     * invokes the {@link java.lang.ThreadGroup#enumerate(Thread[])}
+     * method of the current thread's thread group.
      *
      * <p> An application might use the {@linkplain #activeCount activeCount}
      * method to get an estimate of how big the array should be, however
      * <i>if the array is too short to hold all the threads, the extra threads
-     * are silently ignored.</i>  If it is critical to obtain every live
+     * are silently ignored.</i>  If it is critical to obtain every active
      * thread in the current thread's thread group and its subgroups, the
      * invoker should verify that the returned int value is strictly less
      * than the length of {@code tarray}.
@@ -2044,35 +1199,30 @@ public class Thread implements Runnable {
      *          if {@link java.lang.ThreadGroup#checkAccess} determines that
      *          the current thread cannot access its thread group
      */
-    public static int enumerate(Thread[] tarray) {
+    public static int enumerate(Thread tarray[]) {
         return currentThread().getThreadGroup().enumerate(tarray);
     }
 
     /**
-     * Throws {@code UnsupportedOperationException}.
+     * Counts the number of stack frames in this thread. The thread must
+     * be suspended.
      *
-     * @return     nothing
-     *
-     * @deprecated This method was originally designed to count the number of
-     *             stack frames but the results were never well-defined and it
-     *             depended on thread-suspension.
-     *             This method is subject to removal in a future version of Java SE.
-     * @see        StackWalker
+     * @return     the number of stack frames in this thread.
+     * @exception  IllegalThreadStateException  if this thread is not
+     *             suspended.
+     * @deprecated The definition of this call depends on {@link #suspend},
+     *             which is deprecated.  Further, the results of this call
+     *             were never well-defined.
      */
-    @Deprecated(since="1.2", forRemoval=true)
-    public int countStackFrames() {
-        throw new UnsupportedOperationException();
-    }
+    @Deprecated
+    public native int countStackFrames();
 
     /**
-     * Waits at most {@code millis} milliseconds for this thread to terminate.
-     * A timeout of {@code 0} means to wait forever.
-     * This method returns immediately, without waiting, if the thread has not
-     * been {@link #start() started}.
+     * Waits at most {@code millis} milliseconds for this thread to
+     * die. A timeout of {@code 0} means to wait forever.
      *
-     * @implNote
-     * For platform threads, the implementation uses a loop of {@code this.wait}
-     * calls conditioned on {@code this.isAlive}. As a thread terminates the
+     * <p> This implementation uses a loop of {@code this.wait} calls
+     * conditioned on {@code this.isAlive}. As a thread terminates the
      * {@code this.notifyAll} method is invoked. It is recommended that
      * applications not use {@code wait}, {@code notify}, or
      * {@code notifyAll} on {@code Thread} instances.
@@ -2088,46 +1238,37 @@ public class Thread implements Runnable {
      *          <i>interrupted status</i> of the current thread is
      *          cleared when this exception is thrown.
      */
-    public final void join(long millis) throws InterruptedException {
-        if (millis < 0)
-            throw new IllegalArgumentException("timeout value is negative");
+    public final synchronized void join(long millis)
+            throws InterruptedException {
+        long base = System.currentTimeMillis();
+        long now = 0;
 
-        if (this instanceof VirtualThread vthread) {
-            if (isAlive()) {
-                long nanos = MILLISECONDS.toNanos(millis);
-                vthread.joinNanos(nanos);
-            }
-            return;
+        if (millis < 0) {
+            throw new IllegalArgumentException("timeout value is negative");
         }
 
-        synchronized (this) {
-            if (millis > 0) {
-                if (isAlive()) {
-                    final long startTime = System.nanoTime();
-                    long delay = millis;
-                    do {
-                        wait(delay);
-                    } while (isAlive() && (delay = millis -
-                             NANOSECONDS.toMillis(System.nanoTime() - startTime)) > 0);
+        if (millis == 0) {
+            while (isAlive()) {
+                wait(0);
+            }
+        } else {
+            while (isAlive()) {
+                long delay = millis - now;
+                if (delay <= 0) {
+                    break;
                 }
-            } else {
-                while (isAlive()) {
-                    wait(0);
-                }
+                wait(delay);
+                now = System.currentTimeMillis() - base;
             }
         }
     }
 
     /**
      * Waits at most {@code millis} milliseconds plus
-     * {@code nanos} nanoseconds for this thread to terminate.
-     * If both arguments are {@code 0}, it means to wait forever.
-     * This method returns immediately, without waiting, if the thread has not
-     * been {@link #start() started}.
+     * {@code nanos} nanoseconds for this thread to die.
      *
-     * @implNote
-     * For platform threads, the implementation uses a loop of {@code this.wait}
-     * calls conditioned on {@code this.isAlive}. As a thread terminates the
+     * <p> This implementation uses a loop of {@code this.wait} calls
+     * conditioned on {@code this.isAlive}. As a thread terminates the
      * {@code this.notifyAll} method is invoked. It is recommended that
      * applications not use {@code wait}, {@code notify}, or
      * {@code notifyAll} on {@code Thread} instances.
@@ -2147,33 +1288,27 @@ public class Thread implements Runnable {
      *          <i>interrupted status</i> of the current thread is
      *          cleared when this exception is thrown.
      */
-    public final void join(long millis, int nanos) throws InterruptedException {
+    public final synchronized void join(long millis, int nanos)
+            throws InterruptedException {
+
         if (millis < 0) {
             throw new IllegalArgumentException("timeout value is negative");
         }
 
         if (nanos < 0 || nanos > 999999) {
-            throw new IllegalArgumentException("nanosecond timeout value out of range");
+            throw new IllegalArgumentException(
+                    "nanosecond timeout value out of range");
         }
 
-        if (this instanceof VirtualThread vthread) {
-            if (isAlive()) {
-                // convert arguments to a total in nanoseconds
-                long totalNanos = MILLISECONDS.toNanos(millis);
-                totalNanos += Math.min(Long.MAX_VALUE - totalNanos, nanos);
-                vthread.joinNanos(totalNanos);
-            }
-            return;
-        }
-
-        if (nanos > 0 && millis < Long.MAX_VALUE) {
+        if (nanos >= 500000 || (nanos != 0 && millis == 0)) {
             millis++;
         }
+
         join(millis);
     }
 
     /**
-     * Waits for this thread to terminate.
+     * Waits for this thread to die.
      *
      * <p> An invocation of this method behaves in exactly the same
      * way as the invocation
@@ -2192,133 +1327,64 @@ public class Thread implements Runnable {
     }
 
     /**
-     * Waits for this thread to terminate for up to the given waiting duration.
-     *
-     * <p> This method does not wait if the duration to wait is less than or
-     * equal to zero. In this case, the method just tests if the thread has
-     * terminated.
-     *
-     * @param   duration
-     *          the maximum duration to wait
-     *
-     * @return  {@code true} if the thread has terminated, {@code false} if the
-     *          thread has not terminated
-     *
-     * @throws  InterruptedException
-     *          if the current thread is interrupted while waiting.
-     *          The <i>interrupted status</i> of the current thread is cleared
-     *          when this exception is thrown.
-     *
-     * @throws  IllegalThreadStateException
-     *          if this thread has not been started.
-     *
-     * @since 19
-     */
-    public final boolean join(Duration duration) throws InterruptedException {
-        long nanos = NANOSECONDS.convert(duration); // MAX_VALUE if > 292 years
-
-        Thread.State state = threadState();
-        if (state == State.NEW)
-            throw new IllegalThreadStateException("Thread not started");
-        if (state == State.TERMINATED)
-            return true;
-        if (nanos <= 0)
-            return false;
-
-        if (this instanceof VirtualThread vthread) {
-            return vthread.joinNanos(nanos);
-        }
-
-        // convert to milliseconds
-        long millis = MILLISECONDS.convert(nanos, NANOSECONDS);
-        if (nanos > NANOSECONDS.convert(millis, MILLISECONDS)) {
-            millis += 1L;
-        }
-        join(millis);
-        return isTerminated();
-    }
-
-    /**
      * Prints a stack trace of the current thread to the standard error stream.
-     * This method is useful for debugging.
+     * This method is used only for debugging.
+     *
+     * @see     Throwable#printStackTrace()
      */
     public static void dumpStack() {
         new Exception("Stack trace").printStackTrace();
     }
 
     /**
-     * Marks this thread as either a <i>daemon</i> or <i>non-daemon</i> thread.
-     * The <a href="Runtime.html#shutdown">shutdown sequence</a> begins when all
-     * started non-daemon threads have terminated.
+     * Marks this thread as either a {@linkplain #isDaemon daemon} thread
+     * or a user thread. The Java Virtual Machine exits when the only
+     * threads running are all daemon threads.
      *
-     * <p> The daemon status of a virtual thread is always {@code true} and cannot be
-     * changed by this method to {@code false}.
-     *
-     * <p> This method must be invoked before the thread is started. The behavior
-     * of this method when the thread has terminated is not specified.
+     * <p> This method must be invoked before the thread is started.
      *
      * @param  on
      *         if {@code true}, marks this thread as a daemon thread
      *
-     * @throws  IllegalArgumentException
-     *          if this is a virtual thread and {@code on} is false
      * @throws  IllegalThreadStateException
      *          if this thread is {@linkplain #isAlive alive}
+     *
      * @throws  SecurityException
      *          if {@link #checkAccess} determines that the current
      *          thread cannot modify this thread
      */
     public final void setDaemon(boolean on) {
         checkAccess();
-        if (isVirtual() && !on)
-            throw new IllegalArgumentException("'false' not legal for virtual threads");
-        if (isAlive())
+        if (isAlive()) {
             throw new IllegalThreadStateException();
-        if (!isVirtual())
-            daemon(on);
-    }
-
-    void daemon(boolean on) {
-        holder.daemon = on;
+        }
+        daemon = on;
     }
 
     /**
      * Tests if this thread is a daemon thread.
-     * The daemon status of a virtual thread is always {@code true}.
      *
-     * @return  {@code true} if this thread is a daemon thread;
-     *          {@code false} otherwise.
+     * @return  <code>true</code> if this thread is a daemon thread;
+     *          <code>false</code> otherwise.
      * @see     #setDaemon(boolean)
      */
     public final boolean isDaemon() {
-        if (isVirtual()) {
-            return true;
-        } else {
-            return holder.daemon;
-        }
+        return daemon;
     }
 
     /**
      * Determines if the currently running thread has permission to
      * modify this thread.
      * <p>
-     * If there is a security manager, its {@code checkAccess} method
+     * If there is a security manager, its <code>checkAccess</code> method
      * is called with this thread as its argument. This may result in
-     * throwing a {@code SecurityException}.
+     * throwing a <code>SecurityException</code>.
      *
-     * @throws  SecurityException  if the current thread is not allowed to
-     *          access this thread.
+     * @exception  SecurityException  if the current thread is not allowed to
+     *               access this thread.
      * @see        SecurityManager#checkAccess(Thread)
-     * @deprecated This method is only useful in conjunction with
-     *       {@linkplain SecurityManager the Security Manager}, which is
-     *       deprecated and subject to removal in a future release.
-     *       Consequently, this method is also deprecated and subject to
-     *       removal. There is no replacement for the Security Manager or this
-     *       method.
      */
-    @Deprecated(since="17", forRemoval=true)
     public final void checkAccess() {
-        @SuppressWarnings("removal")
         SecurityManager security = System.getSecurityManager();
         if (security != null) {
             security.checkAccess(this);
@@ -2326,77 +1392,68 @@ public class Thread implements Runnable {
     }
 
     /**
-     * Returns a string representation of this thread. The string representation
-     * will usually include the thread's {@linkplain #threadId() identifier} and
-     * name. The default implementation for platform threads includes the thread's
-     * identifier, name, priority, and the name of the thread group.
+     * Returns a string representation of this thread, including the
+     * thread's name, priority, and thread group.
      *
      * @return  a string representation of this thread.
      */
     public String toString() {
-        StringBuilder sb = new StringBuilder("Thread[#");
-        sb.append(threadId());
-        sb.append(",");
-        sb.append(getName());
-        sb.append(",");
-        sb.append(getPriority());
-        sb.append(",");
         ThreadGroup group = getThreadGroup();
-        if (group != null)
-            sb.append(group.getName());
-        sb.append("]");
-        return sb.toString();
+        if (group != null) {
+            return "Thread[" + getName() + "," + getPriority() + "," +
+                    group.getName() + "]";
+        } else {
+            return "Thread[" + getName() + "," + getPriority() + "," +
+                    "" + "]";
+        }
     }
 
     /**
-     * Returns the context {@code ClassLoader} for this thread.
-     * The context {@code ClassLoader} may be set by the creator of the thread
-     * for use by code running in this thread when loading classes and resources.
-     * If not {@linkplain #setContextClassLoader set}, the default is to inherit
-     * the context class loader from the parent thread.
+     * Returns the context ClassLoader for this Thread. The context
+     * ClassLoader is provided by the creator of the thread for use
+     * by code running in this thread when loading classes and resources.
+     * If not {@linkplain #setContextClassLoader set}, the default is the
+     * ClassLoader context of the parent Thread. The context ClassLoader of the
+     * primordial thread is typically set to the class loader used to load the
+     * application.
      *
-     * <p> The context {@code ClassLoader} of the primordial thread is typically
-     * set to the class loader used to load the application.
+     * <p>If a security manager is present, and the invoker's class loader is not
+     * {@code null} and is not the same as or an ancestor of the context class
+     * loader, then this method invokes the security manager's {@link
+     * SecurityManager#checkPermission(java.security.Permission) checkPermission}
+     * method with a {@link RuntimePermission RuntimePermission}{@code
+     * ("getClassLoader")} permission to verify that retrieval of the context
+     * class loader is permitted.
      *
-     * @return  the context {@code ClassLoader} for this thread, or {@code null}
+     * @return  the context ClassLoader for this Thread, or {@code null}
      *          indicating the system class loader (or, failing that, the
      *          bootstrap class loader)
      *
      * @throws  SecurityException
-     *          if a security manager is present, and the caller's class loader
-     *          is not {@code null} and is not the same as or an ancestor of the
-     *          context class loader, and the caller does not have the
-     *          {@link RuntimePermission}{@code ("getClassLoader")}
+     *          if the current thread cannot get the context ClassLoader
      *
      * @since 1.2
      */
     @CallerSensitive
     public ClassLoader getContextClassLoader() {
-        ClassLoader cl = this.contextClassLoader;
-        if (cl == null)
+        if (contextClassLoader == null)
             return null;
-        if (!isSupportedClassLoader(cl))
-            cl = ClassLoader.getSystemClassLoader();
-        @SuppressWarnings("removal")
         SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
-            Class<?> caller = Reflection.getCallerClass();
-            ClassLoader.checkClassLoaderPermission(cl, caller);
+            ClassLoader.checkClassLoaderPermission(contextClassLoader,
+                    Reflection.getCallerClass());
         }
-        return cl;
+        return contextClassLoader;
     }
 
     /**
-     * Sets the context {@code ClassLoader} for this thread.
+     * Sets the context ClassLoader for this Thread. The context
+     * ClassLoader can be set when a thread is created, and allows
+     * the creator of the thread to provide the appropriate class loader,
+     * through {@code getContextClassLoader}, to code running in the thread
+     * when loading classes and resources.
      *
-     * <p> The context {@code ClassLoader} may be set by the creator of the thread
-     * for use by code running in this thread when loading classes and resources.
-     *
-     * <p> The context {@code ClassLoader} cannot be set when the thread is
-     * {@linkplain Thread.Builder#allowSetThreadLocals(boolean) not allowed} to have
-     * its own copy of thread local variables.
-     *
-     * <p> If a security manager is present, its {@link
+     * <p>If a security manager is present, its {@link
      * SecurityManager#checkPermission(java.security.Permission) checkPermission}
      * method is invoked with a {@link RuntimePermission RuntimePermission}{@code
      * ("setContextClassLoader")} permission to see if setting the context
@@ -2406,43 +1463,21 @@ public class Thread implements Runnable {
      *         the context ClassLoader for this Thread, or null  indicating the
      *         system class loader (or, failing that, the bootstrap class loader)
      *
-     * @throws  UnsupportedOperationException if this thread is not allowed
-     *          to set values for its copy of thread-local variables
-     *
      * @throws  SecurityException
      *          if the current thread cannot set the context ClassLoader
      *
      * @since 1.2
      */
     public void setContextClassLoader(ClassLoader cl) {
-        @SuppressWarnings("removal")
         SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
             sm.checkPermission(new RuntimePermission("setContextClassLoader"));
-        }
-        if (!isSupportedClassLoader(contextClassLoader)) {
-            throw new UnsupportedOperationException(
-                "The context class loader cannot be set");
         }
         contextClassLoader = cl;
     }
 
     /**
-     * Returns true if the given ClassLoader is a "supported" class loader. All
-     * class loaders, except ClassLoaders.NOT_SUPPORTED, are considered supported.
-     * This method allows the initialization of ClassLoaders to be delayed until
-     * it is required.
-     */
-    private static boolean isSupportedClassLoader(ClassLoader loader) {
-        if (loader == null)
-            return true;
-        if (loader == jdk.internal.loader.ClassLoaders.appClassLoader())
-            return true;
-        return loader != Constants.NOT_SUPPORTED_CLASSLOADER;
-    }
-
-    /**
-     * Returns {@code true} if and only if the current thread holds the
+     * Returns <tt>true</tt> if and only if the current thread holds the
      * monitor lock on the specified object.
      *
      * <p>This method is designed to allow a program to assert that
@@ -2452,14 +1487,15 @@ public class Thread implements Runnable {
      * </pre>
      *
      * @param  obj the object on which to test lock ownership
-     * @return {@code true} if the current thread holds the monitor lock on
+     * @throws NullPointerException if obj is <tt>null</tt>
+     * @return <tt>true</tt> if the current thread holds the monitor lock on
      *         the specified object.
      * @since 1.4
      */
     public static native boolean holdsLock(Object obj);
 
     private static final StackTraceElement[] EMPTY_STACK_TRACE
-        = new StackTraceElement[0];
+            = new StackTraceElement[0];
 
     /**
      * Returns an array of stack trace elements representing the stack dump
@@ -2474,8 +1510,8 @@ public class Thread implements Runnable {
      *
      * <p>If there is a security manager, and this thread is not
      * the current thread, then the security manager's
-     * {@code checkPermission} method is called with a
-     * {@code RuntimePermission("getStackTrace")} permission
+     * <tt>checkPermission</tt> method is called with a
+     * <tt>RuntimePermission("getStackTrace")</tt> permission
      * to see if it's ok to get the stack trace.
      *
      * <p>Some virtual machines may, under some circumstances, omit one
@@ -2484,13 +1520,15 @@ public class Thread implements Runnable {
      * this thread is permitted to return a zero-length array from this
      * method.
      *
-     * @return an array of {@code StackTraceElement},
+     * @return an array of <tt>StackTraceElement</tt>,
      * each represents one stack frame.
      *
      * @throws SecurityException
      *        if a security manager exists and its
-     *        {@code checkPermission} method doesn't allow
+     *        <tt>checkPermission</tt> method doesn't allow
      *        getting the stack trace of thread.
+     * @see SecurityManager#checkPermission
+     * @see RuntimePermission
      * @see Throwable#getStackTrace
      *
      * @since 1.5
@@ -2498,51 +1536,35 @@ public class Thread implements Runnable {
     public StackTraceElement[] getStackTrace() {
         if (this != Thread.currentThread()) {
             // check for getStackTrace permission
-            @SuppressWarnings("removal")
             SecurityManager security = System.getSecurityManager();
             if (security != null) {
-                security.checkPermission(SecurityConstants.GET_STACK_TRACE_PERMISSION);
+                security.checkPermission(
+                        SecurityConstants.GET_STACK_TRACE_PERMISSION);
             }
             // optimization so we do not call into the vm for threads that
             // have not yet started or have terminated
             if (!isAlive()) {
                 return EMPTY_STACK_TRACE;
             }
-            StackTraceElement[] stackTrace = asyncGetStackTrace();
-            return (stackTrace != null) ? stackTrace : EMPTY_STACK_TRACE;
+            StackTraceElement[][] stackTraceArray = dumpThreads(new Thread[] {this});
+            StackTraceElement[] stackTrace = stackTraceArray[0];
+            // a thread that was alive during the previous isAlive call may have
+            // since terminated, therefore not having a stacktrace.
+            if (stackTrace == null) {
+                stackTrace = EMPTY_STACK_TRACE;
+            }
+            return stackTrace;
         } else {
+            // Don't need JVM help for current thread
             return (new Exception()).getStackTrace();
         }
     }
 
     /**
-     * Returns an array of stack trace elements representing the stack dump of
-     * this thread. Returns null if the stack trace cannot be obtained. In
-     * the default implementation, null is returned if the thread is a virtual
-     * thread that is not mounted or the thread is a platform thread that has
-     * terminated.
-     */
-    StackTraceElement[] asyncGetStackTrace() {
-        Object stackTrace = getStackTrace0();
-        if (stackTrace == null) {
-            return null;
-        }
-        StackTraceElement[] stes = (StackTraceElement[]) stackTrace;
-        if (stes.length == 0) {
-            return null;
-        } else {
-            return StackTraceElement.of(stes);
-        }
-    }
-
-    private native Object getStackTrace0();
-
-    /**
-     * Returns a map of stack traces for all live platform threads. The map
-     * does not include virtual threads.
+     * Returns a map of stack traces for all live threads.
      * The map keys are threads and each map value is an array of
-     * {@code StackTraceElement} that represents the stack dump
-     * of the corresponding {@code Thread}.
+     * <tt>StackTraceElement</tt> that represents the stack dump
+     * of the corresponding <tt>Thread</tt>.
      * The returned stack traces are in the format specified for
      * the {@link #getStackTrace getStackTrace} method.
      *
@@ -2553,42 +1575,43 @@ public class Thread implements Runnable {
      * no stack trace information about a thread.
      *
      * <p>If there is a security manager, then the security manager's
-     * {@code checkPermission} method is called with a
-     * {@code RuntimePermission("getStackTrace")} permission as well as
-     * {@code RuntimePermission("modifyThreadGroup")} permission
+     * <tt>checkPermission</tt> method is called with a
+     * <tt>RuntimePermission("getStackTrace")</tt> permission as well as
+     * <tt>RuntimePermission("modifyThreadGroup")</tt> permission
      * to see if it is ok to get the stack trace of all threads.
      *
-     * @return a {@code Map} from {@code Thread} to an array of
-     * {@code StackTraceElement} that represents the stack trace of
+     * @return a <tt>Map</tt> from <tt>Thread</tt> to an array of
+     * <tt>StackTraceElement</tt> that represents the stack trace of
      * the corresponding thread.
      *
      * @throws SecurityException
      *        if a security manager exists and its
-     *        {@code checkPermission} method doesn't allow
+     *        <tt>checkPermission</tt> method doesn't allow
      *        getting the stack trace of thread.
      * @see #getStackTrace
+     * @see SecurityManager#checkPermission
+     * @see RuntimePermission
      * @see Throwable#getStackTrace
      *
      * @since 1.5
      */
     public static Map<Thread, StackTraceElement[]> getAllStackTraces() {
         // check for getStackTrace permission
-        @SuppressWarnings("removal")
         SecurityManager security = System.getSecurityManager();
         if (security != null) {
-            security.checkPermission(SecurityConstants.GET_STACK_TRACE_PERMISSION);
-            security.checkPermission(SecurityConstants.MODIFY_THREADGROUP_PERMISSION);
+            security.checkPermission(
+                    SecurityConstants.GET_STACK_TRACE_PERMISSION);
+            security.checkPermission(
+                    SecurityConstants.MODIFY_THREADGROUP_PERMISSION);
         }
 
         // Get a snapshot of the list of all threads
         Thread[] threads = getThreads();
         StackTraceElement[][] traces = dumpThreads(threads);
-        Map<Thread, StackTraceElement[]> m = HashMap.newHashMap(threads.length);
+        Map<Thread, StackTraceElement[]> m = new HashMap<>(threads.length);
         for (int i = 0; i < threads.length; i++) {
-            Thread thread = threads[i];
             StackTraceElement[] stackTrace = traces[i];
-            // BoundVirtualThread objects may be in list returned by the VM
-            if (!thread.isVirtual() && stackTrace != null) {
+            if (stackTrace != null) {
                 m.put(threads[i], stackTrace);
             }
             // else terminated so we don't put it in the map
@@ -2596,16 +1619,21 @@ public class Thread implements Runnable {
         return m;
     }
 
+
+    private static final RuntimePermission SUBCLASS_IMPLEMENTATION_PERMISSION =
+            new RuntimePermission("enableContextClassLoaderOverride");
+
     /** cache of subclass security audit results */
+    /* Replace with ConcurrentReferenceHashMap when/if it appears in a future
+     * release */
     private static class Caches {
         /** cache of subclass security audit results */
-        static final ClassValue<Boolean> subclassAudits =
-            new ClassValue<>() {
-                @Override
-                protected Boolean computeValue(Class<?> type) {
-                    return auditSubclass(type);
-                }
-            };
+        static final ConcurrentMap<WeakClassKey,Boolean> subclassAudits =
+                new ConcurrentHashMap<>();
+
+        /** queue for WeakReferences to audited subclasses */
+        static final ReferenceQueue<Class<?>> subclassAuditsQueue =
+                new ReferenceQueue<>();
     }
 
     /**
@@ -2618,7 +1646,15 @@ public class Thread implements Runnable {
         if (cl == Thread.class)
             return false;
 
-        return Caches.subclassAudits.get(cl);
+        processQueue(Caches.subclassAuditsQueue, Caches.subclassAudits);
+        WeakClassKey key = new WeakClassKey(cl, Caches.subclassAuditsQueue);
+        Boolean result = Caches.subclassAudits.get(key);
+        if (result == null) {
+            result = Boolean.valueOf(auditSubclass(cl));
+            Caches.subclassAudits.putIfAbsent(key, result);
+        }
+
+        return result.booleanValue();
     }
 
     /**
@@ -2627,73 +1663,45 @@ public class Thread implements Runnable {
      * subclass overrides any of the methods, false otherwise.
      */
     private static boolean auditSubclass(final Class<?> subcl) {
-        @SuppressWarnings("removal")
         Boolean result = AccessController.doPrivileged(
-            new PrivilegedAction<>() {
-                public Boolean run() {
-                    for (Class<?> cl = subcl;
-                         cl != Thread.class;
-                         cl = cl.getSuperclass())
-                    {
-                        try {
-                            cl.getDeclaredMethod("getContextClassLoader", new Class<?>[0]);
-                            return Boolean.TRUE;
-                        } catch (NoSuchMethodException ex) {
+                new PrivilegedAction<Boolean>() {
+                    public Boolean run() {
+                        for (Class<?> cl = subcl;
+                             cl != Thread.class;
+                             cl = cl.getSuperclass())
+                        {
+                            try {
+                                cl.getDeclaredMethod("getContextClassLoader", new Class<?>[0]);
+                                return Boolean.TRUE;
+                            } catch (NoSuchMethodException ex) {
+                            }
+                            try {
+                                Class<?>[] params = {ClassLoader.class};
+                                cl.getDeclaredMethod("setContextClassLoader", params);
+                                return Boolean.TRUE;
+                            } catch (NoSuchMethodException ex) {
+                            }
                         }
-                        try {
-                            Class<?>[] params = {ClassLoader.class};
-                            cl.getDeclaredMethod("setContextClassLoader", params);
-                            return Boolean.TRUE;
-                        } catch (NoSuchMethodException ex) {
-                        }
+                        return Boolean.FALSE;
                     }
-                    return Boolean.FALSE;
                 }
-            }
         );
         return result.booleanValue();
     }
 
-    /**
-     * Return an array of all live threads.
-     */
-    static Thread[] getAllThreads() {
-        Thread[] threads = getThreads();
-        return Stream.of(threads)
-                // BoundVirtualThread objects may be in list returned by the VM
-                .filter(Predicate.not(Thread::isVirtual))
-                .toArray(Thread[]::new);
-    }
-
-    private static native StackTraceElement[][] dumpThreads(Thread[] threads);
-    private static native Thread[] getThreads();
+    private native static StackTraceElement[][] dumpThreads(Thread[] threads);
+    private native static Thread[] getThreads();
 
     /**
      * Returns the identifier of this Thread.  The thread ID is a positive
-     * {@code long} number generated when this thread was created.
+     * <tt>long</tt> number generated when this thread was created.
      * The thread ID is unique and remains unchanged during its lifetime.
+     * When a thread is terminated, this thread ID may be reused.
      *
-     * @return this thread's ID
-     *
-     * @deprecated This method is not final and may be overridden to return a
-     * value that is not the thread ID. Use {@link #threadId()} instead.
-     *
+     * @return this thread's ID.
      * @since 1.5
      */
-    @Deprecated(since="19")
     public long getId() {
-        return threadId();
-    }
-
-    /**
-     * Returns the identifier of this Thread.  The thread ID is a positive
-     * {@code long} number generated when this thread was created.
-     * The thread ID is unique and remains unchanged during its lifetime.
-     *
-     * @return this thread's ID
-     * @since 19
-     */
-    public final long threadId() {
         return tid;
     }
 
@@ -2731,9 +1739,15 @@ public class Thread implements Runnable {
      * @since   1.5
      * @see #getState
      */
+    /**
+     * Java中线程的状态，并不等同于操作系统的线程状态
+     */
     public enum State {
         /**
          * Thread state for a thread which has not yet started.
+         */
+        /**
+         * 新建，创建好线程对象，但是还未执行start
          */
         NEW,
 
@@ -2743,6 +1757,9 @@ public class Thread implements Runnable {
          * be waiting for other resources from the operating system
          * such as processor.
          */
+        /**
+         * 运行中，已经执行start了，可能正在执行代码，也有可能正在等待CPU调度
+         */
         RUNNABLE,
 
         /**
@@ -2751,6 +1768,9 @@ public class Thread implements Runnable {
          * to enter a synchronized block/method or
          * reenter a synchronized block/method after calling
          * {@link Object#wait() Object.wait}.
+         */
+        /**
+         * 阻塞中（等待获取锁），，正在等monitor锁，比如被synchronized阻塞
          */
         BLOCKED,
 
@@ -2767,11 +1787,14 @@ public class Thread implements Runnable {
          * <p>A thread in the waiting state is waiting for another thread to
          * perform a particular action.
          *
-         * For example, a thread that has called {@code Object.wait()}
+         * For example, a thread that has called <tt>Object.wait()</tt>
          * on an object is waiting for another thread to call
-         * {@code Object.notify()} or {@code Object.notifyAll()} on
-         * that object. A thread that has called {@code Thread.join()}
+         * <tt>Object.notify()</tt> or <tt>Object.notifyAll()</tt> on
+         * that object. A thread that has called <tt>Thread.join()</tt>
          * is waiting for a specified thread to terminate.
+         */
+        /**
+         * 等待中（等待其他线程notify），调用Object.wait、Thread.join、LockSupport.park后，等待另外一个线程执行Object.notify()、LockSupport.unpark，等待某个线程终止，
          */
         WAITING,
 
@@ -2793,6 +1816,9 @@ public class Thread implements Runnable {
          * Thread state for a terminated thread.
          * The thread has completed execution.
          */
+        /**
+         * 终止状态，线程执行完成
+         */
         TERMINATED;
     }
 
@@ -2805,37 +1831,24 @@ public class Thread implements Runnable {
      * @since 1.5
      */
     public State getState() {
-        return threadState();
+        // get current thread state
+        return sun.misc.VM.toThreadState(threadStatus);
     }
 
-    /**
-     * Returns the state of this thread.
-     * This method can be used instead of getState as getState is not final and
-     * so can be overridden to run arbitrary code.
-     */
-    State threadState() {
-        return jdk.internal.misc.VM.toThreadState(holder.threadStatus);
-    }
+    // Added in JSR-166
 
     /**
-     * Returns true if the thread has terminated.
-     */
-    boolean isTerminated() {
-        return threadState() == State.TERMINATED;
-    }
-
-    /**
-     * Interface for handlers invoked when a {@code Thread} abruptly
+     * Interface for handlers invoked when a <tt>Thread</tt> abruptly
      * terminates due to an uncaught exception.
      * <p>When a thread is about to terminate due to an uncaught exception
      * the Java Virtual Machine will query the thread for its
-     * {@code UncaughtExceptionHandler} using
+     * <tt>UncaughtExceptionHandler</tt> using
      * {@link #getUncaughtExceptionHandler} and will invoke the handler's
-     * {@code uncaughtException} method, passing the thread and the
+     * <tt>uncaughtException</tt> method, passing the thread and the
      * exception as arguments.
-     * If a thread has not had its {@code UncaughtExceptionHandler}
-     * explicitly set, then its {@code ThreadGroup} object acts as its
-     * {@code UncaughtExceptionHandler}. If the {@code ThreadGroup} object
+     * If a thread has not had its <tt>UncaughtExceptionHandler</tt>
+     * explicitly set, then its <tt>ThreadGroup</tt> object acts as its
+     * <tt>UncaughtExceptionHandler</tt>. If the <tt>ThreadGroup</tt> object
      * has no
      * special requirements for dealing with the exception, it can forward
      * the invocation to the {@linkplain #getDefaultUncaughtExceptionHandler
@@ -2875,8 +1888,8 @@ public class Thread implements Runnable {
      * uncaught exception handler. If the thread does not have an explicit
      * uncaught exception handler set, and the thread's thread group
      * (including parent thread groups)  does not specialize its
-     * {@code uncaughtException} method, then the default handler's
-     * {@code uncaughtException} method will be invoked.
+     * <tt>uncaughtException</tt> method, then the default handler's
+     * <tt>uncaughtException</tt> method will be invoked.
      * <p>By setting the default uncaught exception handler, an application
      * can change the way in which uncaught exceptions are handled (such as
      * logging to a specific device, or file) for those threads that would
@@ -2884,33 +1897,35 @@ public class Thread implements Runnable {
      * provided.
      *
      * <p>Note that the default uncaught exception handler should not usually
-     * defer to the thread's {@code ThreadGroup} object, as that could cause
+     * defer to the thread's <tt>ThreadGroup</tt> object, as that could cause
      * infinite recursion.
      *
-     * @param ueh the object to use as the default uncaught exception handler.
-     * If {@code null} then there is no default handler.
+     * @param eh the object to use as the default uncaught exception handler.
+     * If <tt>null</tt> then there is no default handler.
      *
-     * @throws SecurityException if a security manager is present and it denies
-     *         {@link RuntimePermission}{@code ("setDefaultUncaughtExceptionHandler")}
+     * @throws SecurityException if a security manager is present and it
+     *         denies <tt>{@link RuntimePermission}
+     *         (&quot;setDefaultUncaughtExceptionHandler&quot;)</tt>
      *
      * @see #setUncaughtExceptionHandler
      * @see #getUncaughtExceptionHandler
      * @see ThreadGroup#uncaughtException
      * @since 1.5
      */
-    public static void setDefaultUncaughtExceptionHandler(UncaughtExceptionHandler ueh) {
-        @SuppressWarnings("removal")
+    public static void setDefaultUncaughtExceptionHandler(UncaughtExceptionHandler eh) {
         SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
             sm.checkPermission(
-                new RuntimePermission("setDefaultUncaughtExceptionHandler"));
+                    new RuntimePermission("setDefaultUncaughtExceptionHandler")
+            );
         }
-        defaultUncaughtExceptionHandler = ueh;
+
+        defaultUncaughtExceptionHandler = eh;
     }
 
     /**
      * Returns the default handler invoked when a thread abruptly terminates
-     * due to an uncaught exception. If the returned value is {@code null},
+     * due to an uncaught exception. If the returned value is <tt>null</tt>,
      * there is no default.
      * @since 1.5
      * @see #setDefaultUncaughtExceptionHandler
@@ -2924,19 +1939,14 @@ public class Thread implements Runnable {
      * Returns the handler invoked when this thread abruptly terminates
      * due to an uncaught exception. If this thread has not had an
      * uncaught exception handler explicitly set then this thread's
-     * {@code ThreadGroup} object is returned, unless this thread
-     * has terminated, in which case {@code null} is returned.
+     * <tt>ThreadGroup</tt> object is returned, unless this thread
+     * has terminated, in which case <tt>null</tt> is returned.
      * @since 1.5
      * @return the uncaught exception handler for this thread
      */
     public UncaughtExceptionHandler getUncaughtExceptionHandler() {
-        if (isTerminated()) {
-            // uncaughtExceptionHandler may be set to null after thread terminates
-            return null;
-        } else {
-            UncaughtExceptionHandler ueh = uncaughtExceptionHandler;
-            return (ueh != null) ? ueh : getThreadGroup();
-        }
+        return uncaughtExceptionHandler != null ?
+                uncaughtExceptionHandler : group;
     }
 
     /**
@@ -2944,124 +1954,115 @@ public class Thread implements Runnable {
      * due to an uncaught exception.
      * <p>A thread can take full control of how it responds to uncaught
      * exceptions by having its uncaught exception handler explicitly set.
-     * If no such handler is set then the thread's {@code ThreadGroup}
+     * If no such handler is set then the thread's <tt>ThreadGroup</tt>
      * object acts as its handler.
-     * @param ueh the object to use as this thread's uncaught exception
-     * handler. If {@code null} then this thread has no explicit handler.
+     * @param eh the object to use as this thread's uncaught exception
+     * handler. If <tt>null</tt> then this thread has no explicit handler.
      * @throws  SecurityException  if the current thread is not allowed to
      *          modify this thread.
      * @see #setDefaultUncaughtExceptionHandler
      * @see ThreadGroup#uncaughtException
      * @since 1.5
      */
-    public void setUncaughtExceptionHandler(UncaughtExceptionHandler ueh) {
+    public void setUncaughtExceptionHandler(UncaughtExceptionHandler eh) {
         checkAccess();
-        uncaughtExceptionHandler(ueh);
-    }
-
-    void uncaughtExceptionHandler(UncaughtExceptionHandler ueh) {
-        uncaughtExceptionHandler = ueh;
+        uncaughtExceptionHandler = eh;
     }
 
     /**
      * Dispatch an uncaught exception to the handler. This method is
-     * called when a thread terminates with an exception.
+     * intended to be called only by the JVM.
      */
-    void dispatchUncaughtException(Throwable e) {
+    private void dispatchUncaughtException(Throwable e) {
         getUncaughtExceptionHandler().uncaughtException(this, e);
     }
 
     /**
-     * Holder class for constants.
+     * Removes from the specified map any keys that have been enqueued
+     * on the specified reference queue.
      */
-    @SuppressWarnings("removal")
-    private static class Constants {
-        // Thread group for virtual threads.
-        static final ThreadGroup VTHREAD_GROUP;
-
-        // AccessControlContext that doesn't support any permissions.
-        @SuppressWarnings("removal")
-        static final AccessControlContext NO_PERMISSIONS_ACC;
-
-        // Placeholder TCCL when thread locals not supported
-        static final ClassLoader NOT_SUPPORTED_CLASSLOADER;
-
-        static {
-            var getThreadGroup  = new PrivilegedAction<ThreadGroup>() {
-                @Override
-                public ThreadGroup run() {
-                    ThreadGroup parent = Thread.currentCarrierThread().getThreadGroup();
-                    for (ThreadGroup p; (p = parent.getParent()) != null; )
-                        parent = p;
-                    return parent;
-                }
-            };
-            @SuppressWarnings("removal")
-            ThreadGroup root = AccessController.doPrivileged(getThreadGroup);
-            VTHREAD_GROUP = new ThreadGroup(root, "VirtualThreads", MAX_PRIORITY, false);
-
-            NO_PERMISSIONS_ACC = new AccessControlContext(new ProtectionDomain[] {
-                new ProtectionDomain(null, null)
-            });
-
-            var createClassLoader = new PrivilegedAction<ClassLoader>() {
-                @Override
-                public ClassLoader run() {
-                    return new ClassLoader(null) { };
-                }
-            };
-            @SuppressWarnings("removal")
-            ClassLoader loader = AccessController.doPrivileged(createClassLoader);
-            NOT_SUPPORTED_CLASSLOADER = loader;
+    static void processQueue(ReferenceQueue<Class<?>> queue,
+                             ConcurrentMap<? extends
+                                     WeakReference<Class<?>>, ?> map)
+    {
+        Reference<? extends Class<?>> ref;
+        while((ref = queue.poll()) != null) {
+            map.remove(ref);
         }
     }
 
     /**
-     * Returns the special ThreadGroup for virtual threads.
-     */
-    static ThreadGroup virtualThreadGroup() {
-        return Constants.VTHREAD_GROUP;
+     *  Weak key for Class objects.
+     **/
+    static class WeakClassKey extends WeakReference<Class<?>> {
+        /**
+         * saved value of the referent's identity hash code, to maintain
+         * a consistent hash code after the referent has been cleared
+         */
+        private final int hash;
+
+        /**
+         * Create a new WeakClassKey to the given object, registered
+         * with a queue.
+         */
+        WeakClassKey(Class<?> cl, ReferenceQueue<Class<?>> refQueue) {
+            super(cl, refQueue);
+            hash = System.identityHashCode(cl);
+        }
+
+        /**
+         * Returns the identity hash code of the original referent.
+         */
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+
+        /**
+         * Returns true if the given object is this identical
+         * WeakClassKey instance, or, if this object's referent has not
+         * been cleared, if the given object is another WeakClassKey
+         * instance with the identical non-null referent as this one.
+         */
+        @Override
+        public boolean equals(Object obj) {
+            if (obj == this)
+                return true;
+
+            if (obj instanceof WeakClassKey) {
+                Object referent = get();
+                return (referent != null) &&
+                        (referent == ((WeakClassKey) obj).get());
+            } else {
+                return false;
+            }
+        }
     }
+
 
     // The following three initially uninitialized fields are exclusively
     // managed by class java.util.concurrent.ThreadLocalRandom. These
     // fields are used to build the high-performance PRNGs in the
-    // concurrent code.
+    // concurrent code, and we can not risk accidental false sharing.
+    // Hence, the fields are isolated with @Contended.
 
     /** The current seed for a ThreadLocalRandom */
+    @sun.misc.Contended("tlr")
     long threadLocalRandomSeed;
 
     /** Probe hash value; nonzero if threadLocalRandomSeed initialized */
+    @sun.misc.Contended("tlr")
     int threadLocalRandomProbe;
 
     /** Secondary seed isolated from public ThreadLocalRandom sequence */
+    @sun.misc.Contended("tlr")
     int threadLocalRandomSecondarySeed;
-
-    /** The thread container that this thread is in */
-    private volatile ThreadContainer container;  // @Stable candidate?
-    ThreadContainer threadContainer() {
-        return container;
-    }
-    void setThreadContainer(ThreadContainer container) {
-        // assert this.container == null;
-        this.container = container;
-    }
-
-    /** The top of this stack of stackable scopes owned by this thread */
-    private volatile StackableScope headStackableScopes;
-    StackableScope headStackableScopes() {
-        return headStackableScopes;
-    }
-    static void setHeadStackableScope(StackableScope scope) {
-        currentThread().headStackableScopes = scope;
-    }
 
     /* Some private helper methods */
     private native void setPriority0(int newPriority);
+    private native void stop0(Object o);
+    private native void suspend0();
+    private native void resume0();
     private native void interrupt0();
-    private static native void clearInterruptEvent();
     private native void setNativeName(String name);
-
-    // The address of the next thread identifier, see ThreadIdentifiers.
-    private static native long getNextThreadIdOffset();
 }
