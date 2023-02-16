@@ -1,32 +1,32 @@
 /*
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ * ORACLE PROPRIETARY/CONFIDENTIAL. Use is subject to license terms.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
  */
 
 /*
- * This file is available under and governed by the GNU General Public
- * License version 2 only, as published by the Free Software Foundation.
- * However, the following notice accompanied the original version of this
- * file:
+ *
+ *
+ *
+ *
  *
  * Written by Doug Lea with assistance from members of JCP JSR-166
  * Expert Group and released to the public domain, as explained at
@@ -34,17 +34,10 @@
  */
 
 package java.util.concurrent;
-
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
-
-import java.util.AbstractQueue;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.NoSuchElementException;
-import java.util.Objects;
-import java.util.PriorityQueue;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.*;
 
 /**
  * An unbounded {@linkplain BlockingQueue blocking queue} of
@@ -60,22 +53,27 @@ import java.util.concurrent.locks.ReentrantLock;
  * returns the count of both expired and unexpired elements.
  * This queue does not permit null elements.
  *
- * <p>This class and its iterator implement all of the <em>optional</em>
- * methods of the {@link Collection} and {@link Iterator} interfaces.
- * The Iterator provided in method {@link #iterator()} is <em>not</em>
- * guaranteed to traverse the elements of the DelayQueue in any
- * particular order.
+ * <p>This class and its iterator implement all of the
+ * <em>optional</em> methods of the {@link Collection} and {@link
+ * Iterator} interfaces.  The Iterator provided in method {@link
+ * #iterator()} is <em>not</em> guaranteed to traverse the elements of
+ * the DelayQueue in any particular order.
  *
  * <p>This class is a member of the
- * <a href="{@docRoot}/java.base/java/util/package-summary.html#CollectionsFramework">
+ * <a href="{@docRoot}/../technotes/guides/collections/index.html">
  * Java Collections Framework</a>.
  *
  * @since 1.5
  * @author Doug Lea
- * @param <E> the type of elements held in this queue
+ * @param <E> the type of elements held in this collection
+ */
+
+/**
+ * 延时队列
+ * 1.基于PriorityQueue优先级队列+ReentrantLock实现
  */
 public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
-    implements BlockingQueue<E> {
+        implements BlockingQueue<E> {
 
     private final transient ReentrantLock lock = new ReentrantLock();
     private final PriorityQueue<E> q = new PriorityQueue<E>();
@@ -96,7 +94,11 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
      * signalled.  So waiting threads must be prepared to acquire
      * and lose leadership while waiting.
      */
-    private Thread leader;
+    /**
+     * 标识为正在等待优先级队列中第一个元素的线程，且等待有超时时间，其他非leader线程，则进入无休止等待，这样可以避免不必要的等待时间，
+     * 入股偶offer一个到期时间更早的元素，那么就会重置leader，signal一个线程成为新的leader
+     */
+    private Thread leader = null;
 
     /**
      * Condition signalled when a newer element becomes available
@@ -145,6 +147,9 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
         lock.lock();
         try {
             q.offer(e);
+            /**
+             * 新元素到期时间最早，则重置leader，并signal
+             */
             if (q.peek() == e) {
                 leader = null;
                 available.signal();
@@ -192,9 +197,10 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
         lock.lock();
         try {
             E first = q.peek();
-            return (first == null || first.getDelay(NANOSECONDS) > 0)
-                ? null
-                : q.poll();
+            if (first == null || first.getDelay(NANOSECONDS) > 0)
+                return null;
+            else
+                return q.poll();
         } finally {
             lock.unlock();
         }
@@ -213,16 +219,28 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
         try {
             for (;;) {
                 E first = q.peek();
+                /**
+                 * 如果第一个元素为空，则await阻塞，其他线程可以offer或者take
+                 */
                 if (first == null)
                     available.await();
                 else {
                     long delay = first.getDelay(NANOSECONDS);
-                    if (delay <= 0L)
+                    /**
+                     * 第一个元素不为空 && 到时间了，则poll出来
+                     */
+                    if (delay <= 0)
                         return q.poll();
                     first = null; // don't retain ref while waiting
+                    /**
+                     * 非leader线程必须无休止等待signal
+                     */
                     if (leader != null)
                         available.await();
                     else {
+                        /**
+                         * leader线程，等待delay时间即可唤醒poll任务
+                         */
                         Thread thisThread = Thread.currentThread();
                         leader = thisThread;
                         try {
@@ -235,6 +253,9 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
                 }
             }
         } finally {
+            /**
+             * 退出后，队列不为空 && leader线程为空，才唤醒一个线程，否则没有必要唤醒，防止空跑，因为offer的时候也会唤醒
+             */
             if (leader == null && q.peek() != null)
                 available.signal();
             lock.unlock();
@@ -259,15 +280,15 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
             for (;;) {
                 E first = q.peek();
                 if (first == null) {
-                    if (nanos <= 0L)
+                    if (nanos <= 0)
                         return null;
                     else
                         nanos = available.awaitNanos(nanos);
                 } else {
                     long delay = first.getDelay(NANOSECONDS);
-                    if (delay <= 0L)
+                    if (delay <= 0)
                         return q.poll();
-                    if (nanos <= 0L)
+                    if (nanos <= 0)
                         return null;
                     first = null; // don't retain ref while waiting
                     if (nanos < delay || leader != null)
@@ -323,13 +344,40 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
     }
 
     /**
+     * Returns first element only if it is expired.
+     * Used only by drainTo.  Call only when holding lock.
+     */
+    private E peekExpired() {
+        // assert lock.isHeldByCurrentThread();
+        E first = q.peek();
+        return (first == null || first.getDelay(NANOSECONDS) > 0) ?
+                null : first;
+    }
+
+    /**
      * @throws UnsupportedOperationException {@inheritDoc}
      * @throws ClassCastException            {@inheritDoc}
      * @throws NullPointerException          {@inheritDoc}
      * @throws IllegalArgumentException      {@inheritDoc}
      */
     public int drainTo(Collection<? super E> c) {
-        return drainTo(c, Integer.MAX_VALUE);
+        if (c == null)
+            throw new NullPointerException();
+        if (c == this)
+            throw new IllegalArgumentException();
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            int n = 0;
+            for (E e; (e = peekExpired()) != null;) {
+                c.add(e);       // In this order, in case add() throws.
+                q.poll();
+                ++n;
+            }
+            return n;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -339,7 +387,8 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
      * @throws IllegalArgumentException      {@inheritDoc}
      */
     public int drainTo(Collection<? super E> c, int maxElements) {
-        Objects.requireNonNull(c);
+        if (c == null)
+            throw new NullPointerException();
         if (c == this)
             throw new IllegalArgumentException();
         if (maxElements <= 0)
@@ -348,11 +397,8 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
         lock.lock();
         try {
             int n = 0;
-            for (E first;
-                 n < maxElements
-                     && (first = q.peek()) != null
-                     && first.getDelay(NANOSECONDS) <= 0;) {
-                c.add(first);   // In this order, in case add() throws.
+            for (E e; n < maxElements && (e = peekExpired()) != null;) {
+                c.add(e);       // In this order, in case add() throws.
                 q.poll();
                 ++n;
             }
@@ -471,7 +517,7 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
     }
 
     /**
-     * Identity-based version for use in Itr.remove.
+     * Identity-based version for use in Itr.remove
      */
     void removeEQ(Object o) {
         final ReentrantLock lock = this.lock;
@@ -523,7 +569,8 @@ public class DelayQueue<E extends Delayed> extends AbstractQueue<E>
         public E next() {
             if (cursor >= array.length)
                 throw new NoSuchElementException();
-            return (E)array[lastRet = cursor++];
+            lastRet = cursor;
+            return (E)array[cursor++];
         }
 
         public void remove() {
