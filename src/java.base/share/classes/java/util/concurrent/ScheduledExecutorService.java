@@ -103,6 +103,9 @@ public interface ScheduledExecutorService extends ExecutorService {
      *         scheduled for execution
      * @throws NullPointerException if command or unit is null
      */
+    /**
+     * 延迟delay，执行一次
+     */
     public ScheduledFuture<?> schedule(Runnable command,
                                        long delay, TimeUnit unit);
 
@@ -118,6 +121,9 @@ public interface ScheduledExecutorService extends ExecutorService {
      * @throws RejectedExecutionException if the task cannot be
      *         scheduled for execution
      * @throws NullPointerException if callable or unit is null
+     */
+    /**
+     * 周期性执行，即【上个任务执行开始时间】和【下个任务执行开始时间】的时间间隔是固定的
      */
     public <V> ScheduledFuture<V> schedule(Callable<V> callable,
                                            long delay, TimeUnit unit);
@@ -200,6 +206,9 @@ public interface ScheduledExecutorService extends ExecutorService {
      *         scheduled for execution
      * @throws NullPointerException if command or unit is null
      * @throws IllegalArgumentException if delay less than or equal to zero
+     */
+    /**
+     * 固定延迟执行，即【上个任务执行结束时间】和【下个任务执行开始时间】的时间间隔是固定的
      */
     public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command,
                                                      long initialDelay,

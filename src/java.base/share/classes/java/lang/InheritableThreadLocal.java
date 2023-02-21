@@ -51,6 +51,9 @@ package java.lang;
  * @see Thread.Builder#inheritInheritableThreadLocals(boolean)
  */
 
+/**
+ * 子线程从父线程继承ThreadLocal
+ */
 public class InheritableThreadLocal<T> extends ThreadLocal<T> {
     /**
      * Creates an inheritable thread local variable.
@@ -77,6 +80,9 @@ public class InheritableThreadLocal<T> extends ThreadLocal<T> {
      * Get the map associated with a ThreadLocal.
      *
      * @param t the current thread
+     */
+    /**
+     * inheritableThreadLocals作为基础ThreadLocalMap
      */
     @Override
     ThreadLocalMap getMap(Thread t) {
